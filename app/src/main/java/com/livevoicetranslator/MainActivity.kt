@@ -2,6 +2,9 @@
 package com.livevoicetranslator
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -42,31 +45,24 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
-            if (granted) {
-                startListening()
-            } else {
-                statusText.text = "Microphone permission প্রয়োজন"
-            }
+            if (granted) startListening()
+            else statusText.text = "Microphone permission প্রয়োজন"
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         createInterface()
 
         if (SpeechRecognizer.isRecognitionAvailable(this)) {
             speechRecognizer =
                 SpeechRecognizer.createSpeechRecognizer(this)
-            speechRecognizer.setRecognitionListener(
-                speechListener
-            )
+            speechRecognizer.setRecognitionListener(speechListener)
         } else {
             statusText.text = "Speech recognition unavailable"
         }
     }
 
     private fun createInterface() {
-
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(24, 30, 24, 24)
@@ -74,7 +70,6 @@ class MainActivity : ComponentActivity() {
         }
 
         val scroll = ScrollView(this)
-
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -113,9 +108,7 @@ class MainActivity : ComponentActivity() {
 
         val listenButton = Button(this).apply {
             text = "🎙 START LISTENING"
-            setOnClickListener {
-                checkPermissionAndListen()
-            }
+            setOnClickListener { checkPermissionAndListen() }
         }
 
         val stopButton = Button(this).apply {
@@ -130,13 +123,11 @@ class MainActivity : ComponentActivity() {
 
         val translateButton = Button(this).apply {
             text = "TRANSLATE"
-            setOnClickListener {
-                translateText()
-            }
+            setOnClickListener { translateText() }
         }
 
         statusText = TextView(this).apply {
-            text = "অনুবাদ ও Voice Recognition-এর জন্য প্রস্তুত"
+            text = "অনুবাদের জন্য প্রস্তুত"
             textSize = 14f
             setTextColor(Color.DKGRAY)
             gravity = Gravity.CENTER
@@ -188,14 +179,11 @@ class MainActivity : ComponentActivity() {
         ) {
             startListening()
         } else {
-            permissionLauncher.launch(
-                Manifest.permission.RECORD_AUDIO
-            )
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
     private fun startListening() {
-
         if (!::speechRecognizer.isInitialized) {
             statusText.text = "Speech recognition unavailable"
             return
@@ -208,18 +196,9 @@ class MainActivity : ComponentActivity() {
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                 RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
             )
-            putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE,
-                "bn-BD"
-            )
-            putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE,
-                "bn-BD"
-            )
-            putExtra(
-                RecognizerIntent.EXTRA_PARTIAL_RESULTS,
-                true
-            )
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "bn-BD")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "bn-BD")
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         }
 
         try {
@@ -241,7 +220,6 @@ class MainActivity : ComponentActivity() {
         }
 
         override fun onRmsChanged(rmsdB: Float) {}
-
         override fun onBufferReceived(buffer: ByteArray?) {}
 
         override fun onEndOfSpeech() {
@@ -250,20 +228,15 @@ class MainActivity : ComponentActivity() {
 
         override fun onError(error: Int) {
             statusText.text = when (error) {
-                SpeechRecognizer.ERROR_AUDIO ->
-                    "Audio error"
-                SpeechRecognizer.ERROR_NETWORK ->
-                    "Network error"
-                SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
-                    "Network timeout"
                 SpeechRecognizer.ERROR_NO_MATCH ->
-                    "কোনো কথা শনাক্ত হয়নি, আবার চেষ্টা করুন"
+                    "কোনো কথা শনাক্ত হয়নি"
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
                     "কোনো কথা শোনা যায়নি"
+                SpeechRecognizer.ERROR_NETWORK ->
+                    "Network error"
                 SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
                     "Microphone permission নেই"
-                else ->
-                    "Voice recognition error: $error"
+                else -> "Voice recognition error: $error"
             }
         }
 
@@ -296,7 +269,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun translateText() {
-
         val original = inputText.text.toString().trim()
 
         if (original.isEmpty()) {
@@ -317,34 +289,63 @@ class MainActivity : ComponentActivity() {
         resultLayout.addView(loading)
 
         languages.forEach { language ->
-
             executor.execute {
-
-                val translated = translate(
-                    original,
-                    language.second
-                )
+                val translated = translate(original, language.second)
 
                 runOnUiThread {
-
                     if (resultLayout.indexOfChild(loading) >= 0) {
                         resultLayout.removeView(loading)
                     }
 
-                    val result = TextView(this).apply {
-                        text = if (translated != null) {
-                            "${language.first}\n$translated"
-                        } else {
-                            "${language.first}\nঅনুবাদ পাওয়া যায়নি"
-                        }
+                    val card = LinearLayout(this).apply {
+                        orientation = LinearLayout.VERTICAL
+                        setPadding(14, 14, 14, 14)
+                        setBackgroundColor(Color.rgb(242, 246, 250))
+                    }
 
+                    val languageTitle = TextView(this).apply {
+                        text = language.first
+                        textSize = 18f
+                        setTextColor(Color.rgb(20, 75, 130))
+                    }
+
+                    val translatedText = translated ?: "অনুবাদ পাওয়া যায়নি"
+
+                    val result = TextView(this).apply {
+                        text = translatedText
                         textSize = 17f
                         setTextColor(Color.BLACK)
-                        setPadding(14, 14, 14, 14)
-                        setBackgroundColor(
-                            Color.rgb(242, 246, 250)
-                        )
+                        setPadding(0, 10, 0, 10)
                     }
+
+                    val copyButton = Button(this).apply {
+                        text = "COPY ${language.first.uppercase()}"
+                        isEnabled = translated != null
+
+                        setOnClickListener {
+                            val clipboard =
+                                getSystemService(
+                                    Context.CLIPBOARD_SERVICE
+                                ) as ClipboardManager
+
+                            clipboard.setPrimaryClip(
+                                ClipData.newPlainText(
+                                    language.first,
+                                    translatedText
+                                )
+                            )
+
+                            Toast.makeText(
+                                this@MainActivity,
+                                "${language.first} copied",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+
+                    card.addView(languageTitle)
+                    card.addView(result)
+                    card.addView(copyButton)
 
                     val params = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -352,8 +353,7 @@ class MainActivity : ComponentActivity() {
                     )
 
                     params.setMargins(0, 6, 0, 6)
-
-                    resultLayout.addView(result, params)
+                    resultLayout.addView(card, params)
 
                     if (resultLayout.childCount >= languages.size) {
                         statusText.text = "অনুবাদ সম্পন্ন"
@@ -367,11 +367,9 @@ class MainActivity : ComponentActivity() {
         text: String,
         targetLanguage: String
     ): String? {
-
         var connection: HttpURLConnection? = null
 
         return try {
-
             val query = URLEncoder.encode(text, "UTF-8")
 
             val address =
@@ -403,7 +401,6 @@ class MainActivity : ComponentActivity() {
                     Html.FROM_HTML_MODE_LEGACY
                 ).toString()
             }
-
         } catch (e: Exception) {
             null
         } finally {
