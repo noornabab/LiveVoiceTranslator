@@ -37,19 +37,19 @@ class VoiceForegroundService : Service() {
         private const val NOTIFICATION_ID = 1001
     }
 
-    private var speechRecognizer: SpeechRecognizer? = null
-
     private val handler = Handler(Looper.getMainLooper())
+
     private val executor = Executors.newSingleThreadExecutor()
+
     private val translationId = AtomicInteger(0)
+
+    private var speechRecognizer: SpeechRecognizer? = null
 
     private var listening = false
     private var sourceLanguage = "en"
     private var lastPartialText = ""
 
-    private val restartListening = Runnable {
-        startRecognition()
-    }
+    private var restartRunnable: Runnable? = null
 
     private val partialTranslation = Runnable {
         if (lastPartialText.isNotBlank()) {
@@ -84,189 +84,56 @@ class VoiceForegroundService : Service() {
         }
 
         try {
-            val notification = createNotification(
-                "Starting speech recognition..."
-            )
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
                     NOTIFICATION_ID,
-                    notification,
+                    createNotification("Starting automatic translation..."),
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                 )
             } else {
                 startForeground(
                     NOTIFICATION_ID,
-                    notification
+                    createNotification("Starting automatic translation...")
                 )
             }
 
-            if (SpeechRecognizer.isRecognitionAvailable(this)) {
-                if (!listening) {
-                    listening = true
-                    startRecognition()
-                }
-            } else {
-                updateNotification(
-                    "Speech recognition unavailable"
-                )
+            if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+                updateNotification("Speech Recognition unavailable")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+
+            if (!listening) {
+                listening = true
+                startRecognition(true)
             }
 
         } catch (e: Exception) {
-            updateNotification(
-                "Service Error: ${e.message}"
-            )
+            updateNotification("Service Error: ${e.message}")
             stopSelf()
         }
 
         return START_NOT_STICKY
     }
 
-    private fun startRecognition() {
+    private fun startRecognition(recreate: Boolean = false) {
 
         if (!listening) return
 
         try {
-            speechRecognizer?.cancel()
-            speechRecognizer?.destroy()
 
-            speechRecognizer =
-                SpeechRecognizer.createSpeechRecognizer(this)
+            if (recreate || speechRecognizer == null) {
 
-            speechRecognizer?.setRecognitionListener(
-                object : RecognitionListener {
+                speechRecognizer?.destroy()
 
-                    override fun onReadyForSpeech(
-                        params: Bundle?
-                    ) {
-                        updateNotification(
-                            "Listening: English / Hindi / Urdu / Arabic"
-                        )
-                    }
+                speechRecognizer =
+                    SpeechRecognizer.createSpeechRecognizer(this)
 
-                    override fun onBeginningOfSpeech() {
-                        updateNotification("Speech detected...")
-                    }
-
-                    override fun onRmsChanged(rmsdB: Float) {}
-
-                    override fun onBufferReceived(
-                        buffer: ByteArray?
-                    ) {}
-
-                    override fun onEndOfSpeech() {
-                        updateNotification(
-                            "Processing speech..."
-                        )
-                    }
-
-                    override fun onError(error: Int) {
-
-                        updateNotification(
-                            "Speech Error Code: $error"
-                        )
-
-                        if (listening) {
-                            handler.removeCallbacks(
-                                restartListening
-                            )
-
-                            handler.postDelayed(
-                                restartListening,
-                                2000
-                            )
-                        }
-                    }
-
-                    override fun onLanguageDetection(
-                        results: Bundle
-                    ) {
-
-                        if (Build.VERSION.SDK_INT >= 34) {
-
-                            val detected = results.getString(
-                                SpeechRecognizer.DETECTED_LANGUAGE
-                            )
-
-                            if (!detected.isNullOrBlank()) {
-
-                                sourceLanguage =
-                                    languageCode(detected)
-
-                                updateNotification(
-                                    "Detected language: $detected"
-                                )
-                            }
-                        }
-                    }
-
-                    override fun onPartialResults(
-                        partialResults: Bundle?
-                    ) {
-
-                        val text = partialResults
-                            ?.getStringArrayList(
-                                SpeechRecognizer.RESULTS_RECOGNITION
-                            )
-                            ?.firstOrNull()
-
-                        if (!text.isNullOrBlank()) {
-
-                            updateNotification(
-                                "Heard: $text"
-                            )
-
-                            lastPartialText = text
-
-                            handler.removeCallbacks(
-                                partialTranslation
-                            )
-
-                            handler.postDelayed(
-                                partialTranslation,
-                                1000
-                            )
-                        }
-                    }
-
-                    override fun onResults(
-                        results: Bundle?
-                    ) {
-
-                        handler.removeCallbacks(
-                            partialTranslation
-                        )
-
-                        val text = results
-                            ?.getStringArrayList(
-                                SpeechRecognizer.RESULTS_RECOGNITION
-                            )
-                            ?.firstOrNull()
-
-                        if (!text.isNullOrBlank()) {
-
-                            lastPartialText = ""
-
-                            translateText(
-                                text,
-                                sourceLanguage
-                            )
-                        }
-
-                        if (listening) {
-                            handler.postDelayed(
-                                restartListening,
-                                700
-                            )
-                        }
-                    }
-
-                    override fun onEvent(
-                        eventType: Int,
-                        params: Bundle?
-                    ) {}
-                }
-            )
+                speechRecognizer?.setRecognitionListener(
+                    createRecognitionListener()
+                )
+            }
 
             val speechIntent = Intent(
                 RecognizerIntent.ACTION_RECOGNIZE_SPEECH
@@ -287,6 +154,11 @@ class VoiceForegroundService : Service() {
                     true
                 )
 
+                putExtra(
+                    RecognizerIntent.EXTRA_MAX_RESULTS,
+                    3
+                )
+
                 if (Build.VERSION.SDK_INT >= 34) {
 
                     putExtra(
@@ -298,18 +170,28 @@ class VoiceForegroundService : Service() {
                         RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES,
                         arrayListOf(
                             "en-US",
+                            "ar-SA",
                             "hi-IN",
                             "ur-PK",
-                            "ar-SA"
+                            "bn-BD"
                         )
                     )
 
                     putExtra(
                         RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH,
-                        RecognizerIntent.LANGUAGE_SWITCH_BALANCED
+                        true
+                    )
+
+                    putExtra(
+                        RecognizerIntent.EXTRA_LANGUAGE_SWITCH_MAX_SWITCHES,
+                        10
                     )
                 }
             }
+
+            updateNotification(
+                "Automatic Listening: 5 Languages"
+            )
 
             speechRecognizer?.startListening(speechIntent)
 
@@ -319,11 +201,173 @@ class VoiceForegroundService : Service() {
                 "Recognition Error: ${e.message}"
             )
 
-            handler.postDelayed(
-                restartListening,
-                2000
-            )
+            scheduleRestart(11)
         }
+    }
+
+    private fun createRecognitionListener(): RecognitionListener {
+
+        return object : RecognitionListener {
+
+            override fun onReadyForSpeech(params: Bundle?) {
+                updateNotification(
+                    "Listening: English / Arabic / Hindi / Urdu / Bangla"
+                )
+            }
+
+            override fun onBeginningOfSpeech() {
+                updateNotification("Speech detected...")
+            }
+
+            override fun onRmsChanged(rmsdB: Float) {}
+
+            override fun onBufferReceived(buffer: ByteArray?) {}
+
+            override fun onEndOfSpeech() {
+                updateNotification("Processing speech...")
+            }
+
+            override fun onError(error: Int) {
+
+                updateNotification(
+                    when (error) {
+                        SpeechRecognizer.ERROR_NO_MATCH ->
+                            "No speech match. Listening again..."
+
+                        SpeechRecognizer.ERROR_SERVER_DISCONNECTED ->
+                            "Server disconnected. Reconnecting..."
+
+                        SpeechRecognizer.ERROR_NETWORK ->
+                            "Network error. Checking connection..."
+
+                        SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
+                            "Network timeout. Retrying..."
+
+                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
+                            "Microphone permission required"
+
+                        SpeechRecognizer.ERROR_RECOGNIZER_BUSY ->
+                            "Recognizer busy. Retrying..."
+
+                        else ->
+                            "Speech Error Code: $error"
+                    }
+                )
+
+                if (listening) {
+                    scheduleRestart(error)
+                }
+            }
+
+            override fun onLanguageDetection(results: Bundle) {
+
+                if (Build.VERSION.SDK_INT >= 34) {
+
+                    val detected = results.getString(
+                        SpeechRecognizer.DETECTED_LANGUAGE
+                    )
+
+                    if (!detected.isNullOrBlank()) {
+
+                        sourceLanguage = languageCode(detected)
+
+                        updateNotification(
+                            "Detected language: $detected"
+                        )
+                    }
+                }
+            }
+
+            override fun onPartialResults(
+                partialResults: Bundle?
+            ) {
+
+                val text = partialResults
+                    ?.getStringArrayList(
+                        SpeechRecognizer.RESULTS_RECOGNITION
+                    )
+                    ?.firstOrNull()
+
+                if (!text.isNullOrBlank()) {
+
+                    lastPartialText = text
+
+                    updateNotification(
+                        "Heard: $text"
+                    )
+
+                    handler.removeCallbacks(partialTranslation)
+
+                    handler.postDelayed(
+                        partialTranslation,
+                        1200
+                    )
+                }
+            }
+
+            override fun onResults(results: Bundle?) {
+
+                handler.removeCallbacks(partialTranslation)
+
+                val text = results
+                    ?.getStringArrayList(
+                        SpeechRecognizer.RESULTS_RECOGNITION
+                    )
+                    ?.firstOrNull()
+
+                if (!text.isNullOrBlank()) {
+
+                    lastPartialText = ""
+
+                    translateText(
+                        text,
+                        sourceLanguage
+                    )
+                }
+
+                if (listening) {
+                    scheduleRestart(0)
+                }
+            }
+
+            override fun onEvent(
+                eventType: Int,
+                params: Bundle?
+            ) {}
+        }
+    }
+
+    private fun scheduleRestart(error: Int) {
+
+        if (!listening) return
+
+        restartRunnable?.let {
+            handler.removeCallbacks(it)
+        }
+
+        val delay = when (error) {
+            SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> 3000L
+            SpeechRecognizer.ERROR_NETWORK -> 4000L
+            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> 4000L
+            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> 2500L
+            SpeechRecognizer.ERROR_NO_MATCH -> 1200L
+            else -> 2000L
+        }
+
+        val recreate =
+            error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED ||
+            error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
+
+        restartRunnable = Runnable {
+            if (listening) {
+                startRecognition(recreate)
+            }
+        }
+
+        handler.postDelayed(
+            restartRunnable!!,
+            delay
+        )
     }
 
     private fun languageCode(tag: String): String {
@@ -332,9 +376,10 @@ class VoiceForegroundService : Service() {
             tag.lowercase(Locale.ROOT).substringBefore("-")
         ) {
             "en" -> "en"
+            "ar" -> "ar"
             "hi" -> "hi"
             "ur" -> "ur"
-            "ar" -> "ar"
+            "bn" -> "bn"
             else -> "en"
         }
     }
@@ -345,6 +390,22 @@ class VoiceForegroundService : Service() {
     ) {
 
         val requestId = translationId.incrementAndGet()
+
+        // Bengali: Show directly without translation.
+
+        if (source == "bn") {
+
+            showPopup(
+                "Detected: Bengali",
+                originalText
+            )
+
+            updateNotification(
+                "Bengali: $originalText"
+            )
+
+            return
+        }
 
         updateNotification(
             "Translating: $originalText"
@@ -369,8 +430,8 @@ class VoiceForegroundService : Service() {
                         as HttpURLConnection
 
                 connection.requestMethod = "GET"
-                connection.connectTimeout = 10000
-                connection.readTimeout = 10000
+                connection.connectTimeout = 15000
+                connection.readTimeout = 15000
 
                 try {
 
@@ -380,10 +441,13 @@ class VoiceForegroundService : Service() {
 
                     val json = JSONObject(response)
 
-                    translated = json
-                        .optJSONObject("responseData")
-                        ?.optString("translatedText")
-                        ?: ""
+                    if (json.optInt("responseStatus") == 200) {
+
+                        translated = json
+                            .optJSONObject("responseData")
+                            ?.optString("translatedText")
+                            ?: ""
+                    }
 
                 } finally {
                     connection.disconnect()
@@ -399,36 +463,14 @@ class VoiceForegroundService : Service() {
 
                     if (translated.isNotBlank()) {
 
-                        updateNotification(
-                            "Bengali translation: $translated"
+                        showPopup(
+                            "Detected: $source",
+                            translated
                         )
 
-                        val popupIntent = Intent(
-                            this,
-                            FloatingTranslatorService::class.java
-                        ).apply {
-
-                            action =
-                                FloatingTranslatorService.ACTION_UPDATE
-
-                            putExtra(
-                                FloatingTranslatorService.EXTRA_STATUS,
-                                "Original: $originalText"
-                            )
-
-                            putExtra(
-                                FloatingTranslatorService.EXTRA_MESSAGE,
-                                translated
-                            )
-                        }
-
-                        try {
-                            startService(popupIntent)
-                        } catch (e: Exception) {
-                            updateNotification(
-                                "Popup update failed"
-                            )
-                        }
+                        updateNotification(
+                            "Bengali translation ready"
+                        )
 
                     } else {
 
@@ -441,14 +483,46 @@ class VoiceForegroundService : Service() {
         }
     }
 
+    private fun showPopup(
+        status: String,
+        message: String
+    ) {
+
+        val popupIntent = Intent(
+            this,
+            FloatingTranslatorService::class.java
+        ).apply {
+
+            action =
+                FloatingTranslatorService.ACTION_UPDATE
+
+            putExtra(
+                FloatingTranslatorService.EXTRA_STATUS,
+                status
+            )
+
+            putExtra(
+                FloatingTranslatorService.EXTRA_MESSAGE,
+                message
+            )
+        }
+
+        try {
+            startService(popupIntent)
+        } catch (e: Exception) {
+            updateNotification("Popup update failed")
+        }
+    }
+
     private fun stopListening() {
 
         listening = false
 
         translationId.incrementAndGet()
 
-        handler.removeCallbacks(restartListening)
-        handler.removeCallbacks(partialTranslation)
+        handler.removeCallbacksAndMessages(null)
+
+        restartRunnable = null
 
         speechRecognizer?.cancel()
         speechRecognizer?.destroy()
@@ -466,7 +540,7 @@ class VoiceForegroundService : Service() {
             )
 
             channel.description =
-                "Background live translation status"
+                "Automatic voice translation status"
 
             getSystemService(
                 NotificationManager::class.java
@@ -525,9 +599,7 @@ class VoiceForegroundService : Service() {
             .build()
     }
 
-    private fun updateNotification(
-        message: String
-    ) {
+    private fun updateNotification(message: String) {
 
         getSystemService(
             NotificationManager::class.java
@@ -538,14 +610,15 @@ class VoiceForegroundService : Service() {
     }
 
     override fun onDestroy() {
+
         stopListening()
+
         executor.shutdownNow()
+
         super.onDestroy()
     }
 
-    override fun onBind(
-        intent: Intent?
-    ): IBinder? {
+    override fun onBind(intent: Intent?): IBinder? {
         return null
     }
 }
