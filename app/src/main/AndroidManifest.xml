@@ -18,7 +18,7 @@
     <!-- Notification -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Overlay permission -->
+    <!-- Floating Popup -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <uses-feature
@@ -49,6 +49,11 @@
             android:name=".VoiceForegroundService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+
+        <!-- Floating Translation Popup -->
+        <service
+            android:name=".FloatingTranslatorService"
+            android:exported="false" />
 
     </application>
 
