@@ -37,7 +37,10 @@ class MainActivity : ComponentActivity() {
 
     private var telephonyManager: TelephonyManager? = null
     private var callListener: PhoneStateListener? = null
+
     private var pendingBackgroundStart = false
+    private var incomingCallRinging = false
+    private var callWasActive = false
 
     private val executor = Executors.newFixedThreadPool(4)
 
@@ -52,15 +55,19 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
+
             if (granted) {
+
                 if (pendingBackgroundStart) {
                     pendingBackgroundStart = false
                     requestNotificationAndStart()
                 } else {
                     startListening()
                 }
+
             } else {
-                statusText.text = "Microphone permission প্রয়োজন"
+                statusText.text =
+                    "Microphone permission প্রয়োজন"
             }
         }
 
@@ -75,12 +82,14 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
+
             if (granted) {
                 registerCallListener()
-                statusText.text = "Phone Call Detection চালু হয়েছে"
+                statusText.text =
+                    "Phone Call Detection চালু হয়েছে"
             } else {
                 statusText.text =
-                    "Phone Call Detection-এর Permission দেওয়া হয়নি"
+                    "Phone State Permission দেওয়া হয়নি"
             }
         }
 
@@ -90,31 +99,48 @@ class MainActivity : ComponentActivity() {
         createInterface()
 
         if (SpeechRecognizer.isRecognitionAvailable(this)) {
+
             speechRecognizer =
                 SpeechRecognizer.createSpeechRecognizer(this)
 
-            speechRecognizer.setRecognitionListener(speechListener)
+            speechRecognizer.setRecognitionListener(
+                speechListener
+            )
+
         } else {
-            statusText.text = "Speech recognition unavailable"
+            statusText.text =
+                "Speech recognition unavailable"
         }
 
         checkCallPermission()
     }
 
+    // ==========================================
+    // PHONE CALL PERMISSION
+    // ==========================================
+
     private fun checkCallPermission() {
+
         if (
             ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.READ_PHONE_STATE
             ) == PackageManager.PERMISSION_GRANTED
         ) {
+
             registerCallListener()
+
         } else {
+
             callPermissionLauncher.launch(
                 Manifest.permission.READ_PHONE_STATE
             )
         }
     }
+
+    // ==========================================
+    // PHONE CALL DETECTION
+    // ==========================================
 
     @Suppress("DEPRECATION")
     private fun registerCallListener() {
@@ -129,6 +155,7 @@ class MainActivity : ComponentActivity() {
         }
 
         try {
+
             telephonyManager =
                 getSystemService(Context.TELEPHONY_SERVICE)
                     as TelephonyManager
@@ -139,24 +166,64 @@ class MainActivity : ComponentActivity() {
                     state: Int,
                     phoneNumber: String?
                 ) {
-                    super.onCallStateChanged(state, phoneNumber)
+
+                    super.onCallStateChanged(
+                        state,
+                        phoneNumber
+                    )
 
                     runOnUiThread {
+
                         when (state) {
 
                             TelephonyManager.CALL_STATE_RINGING -> {
+
+                                incomingCallRinging = true
+                                callWasActive = true
+
                                 statusText.text =
-                                    "📞 INCOMING CALL - ফোনে কল এসেছে"
+                                    "📞 INCOMING CALL"
+
+                                showCallPopup(
+                                    "INCOMING CALL",
+                                    "📞 ফোনে কল এসেছে। Speaker চালু করুন।"
+                                )
                             }
 
                             TelephonyManager.CALL_STATE_OFFHOOK -> {
-                                statusText.text =
-                                    "📞 CALL CONNECTED - Speaker চালু করুন"
+
+                                callWasActive = true
+
+                                val callStatus =
+                                    if (incomingCallRinging) {
+                                        "INCOMING CALL CONNECTED"
+                                    } else {
+                                        "OUTGOING / ACTIVE CALL"
+                                    }
+
+                                statusText.text = callStatus
+
+                                showCallPopup(
+                                    callStatus,
+                                    "🎙 অপর পাশের কথা শোনার চেষ্টা চলছে। Speaker চালু করুন।"
+                                )
                             }
 
                             TelephonyManager.CALL_STATE_IDLE -> {
-                                statusText.text =
-                                    "CALL ENDED / ফোন এখন Idle"
+
+                                if (callWasActive) {
+
+                                    statusText.text =
+                                        "CALL ENDED"
+
+                                    showCallPopup(
+                                        "CALL ENDED",
+                                        "কল শেষ হয়েছে।"
+                                    )
+                                }
+
+                                incomingCallRinging = false
+                                callWasActive = false
                             }
                         }
                     }
@@ -169,10 +236,75 @@ class MainActivity : ComponentActivity() {
             )
 
         } catch (e: Exception) {
+
             statusText.text =
                 "Call Detection Error: ${e.message}"
         }
     }
+
+    // ==========================================
+    // FLOATING POPUP CONNECTION
+    // ==========================================
+
+    private fun showCallPopup(
+        callStatus: String,
+        message: String
+    ) {
+
+        try {
+
+            if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                !android.provider.Settings.canDrawOverlays(this)
+            ) {
+
+                statusText.text =
+                    "Floating Popup permission প্রয়োজন"
+
+                return
+            }
+
+            val showIntent = Intent(
+                this,
+                FloatingTranslatorService::class.java
+            ).apply {
+                action =
+                    FloatingTranslatorService.ACTION_SHOW
+            }
+
+            startService(showIntent)
+
+            val updateIntent = Intent(
+                this,
+                FloatingTranslatorService::class.java
+            ).apply {
+
+                action =
+                    FloatingTranslatorService.ACTION_UPDATE
+
+                putExtra(
+                    FloatingTranslatorService.EXTRA_STATUS,
+                    callStatus
+                )
+
+                putExtra(
+                    FloatingTranslatorService.EXTRA_MESSAGE,
+                    message
+                )
+            }
+
+            startService(updateIntent)
+
+        } catch (e: Exception) {
+
+            statusText.text =
+                "Popup চালু করা যায়নি: ${e.message}"
+        }
+    }
+
+    // ==========================================
+    // USER INTERFACE
+    // ==========================================
 
     private fun createInterface() {
 
@@ -230,6 +362,7 @@ class MainActivity : ComponentActivity() {
         val stopButton = Button(this).apply {
             text = "STOP LISTENING"
             setOnClickListener {
+
                 if (::speechRecognizer.isInitialized) {
                     speechRecognizer.stopListening()
                     statusText.text = "Listening stopped"
@@ -304,16 +437,25 @@ class MainActivity : ComponentActivity() {
         setContentView(root)
     }
 
+    // ==========================================
+    // MICROPHONE PERMISSION
+    // ==========================================
+
     private fun checkPermissionAndListen() {
+
         if (
             ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.RECORD_AUDIO
             ) == PackageManager.PERMISSION_GRANTED
         ) {
+
             startListening()
+
         } else {
+
             pendingBackgroundStart = false
+
             permissionLauncher.launch(
                 Manifest.permission.RECORD_AUDIO
             )
@@ -328,10 +470,13 @@ class MainActivity : ComponentActivity() {
                 Manifest.permission.RECORD_AUDIO
             ) != PackageManager.PERMISSION_GRANTED
         ) {
+
             pendingBackgroundStart = true
+
             permissionLauncher.launch(
                 Manifest.permission.RECORD_AUDIO
             )
+
             return
         }
 
@@ -347,22 +492,31 @@ class MainActivity : ComponentActivity() {
                 Manifest.permission.POST_NOTIFICATIONS
             ) != PackageManager.PERMISSION_GRANTED
         ) {
+
             notificationLauncher.launch(
                 Manifest.permission.POST_NOTIFICATIONS
             )
+
         } else {
+
             startBackgroundService()
         }
     }
 
+    // ==========================================
+    // BACKGROUND MICROPHONE SERVICE
+    // ==========================================
+
     private fun startBackgroundService() {
 
         try {
+
             val serviceIntent = Intent(
                 this,
                 VoiceForegroundService::class.java
             ).apply {
-                action = VoiceForegroundService.ACTION_START
+                action =
+                    VoiceForegroundService.ACTION_START
             }
 
             ContextCompat.startForegroundService(
@@ -374,6 +528,7 @@ class MainActivity : ComponentActivity() {
                 "Background microphone চালু করার অনুরোধ পাঠানো হয়েছে"
 
         } catch (e: Exception) {
+
             statusText.text =
                 "Background service চালু করা যায়নি: ${e.message}"
         }
@@ -385,7 +540,8 @@ class MainActivity : ComponentActivity() {
             this,
             VoiceForegroundService::class.java
         ).apply {
-            action = VoiceForegroundService.ACTION_STOP
+            action =
+                VoiceForegroundService.ACTION_STOP
         }
 
         startService(serviceIntent)
@@ -394,28 +550,39 @@ class MainActivity : ComponentActivity() {
             "Background service বন্ধ করার অনুরোধ পাঠানো হয়েছে"
     }
 
+    // ==========================================
+    // FOREGROUND SPEECH RECOGNITION
+    // ==========================================
+
     private fun startListening() {
 
         if (!::speechRecognizer.isInitialized) {
-            statusText.text = "Speech recognition unavailable"
+
+            statusText.text =
+                "Speech recognition unavailable"
+
             return
         }
 
         val intent = Intent(
             RecognizerIntent.ACTION_RECOGNIZE_SPEECH
         ).apply {
+
             putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                 RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
             )
+
             putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE,
                 "bn-BD"
             )
+
             putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE,
                 "bn-BD"
             )
+
             putExtra(
                 RecognizerIntent.EXTRA_PARTIAL_RESULTS,
                 true
@@ -423,93 +590,131 @@ class MainActivity : ComponentActivity() {
         }
 
         try {
-            statusText.text = "আপনার কথা শুনছি..."
+
+            statusText.text =
+                "আপনার কথা শুনছি..."
+
             speechRecognizer.startListening(intent)
+
         } catch (e: Exception) {
-            statusText.text = "Listening শুরু করা যায়নি"
+
+            statusText.text =
+                "Listening শুরু করা যায়নি"
         }
     }
 
-    private val speechListener = object : RecognitionListener {
+    private val speechListener =
+        object : RecognitionListener {
 
-        override fun onReadyForSpeech(params: Bundle?) {
-            statusText.text = "বলুন, আপনার কথা শুনছি..."
-        }
-
-        override fun onBeginningOfSpeech() {
-            statusText.text = "কথা শনাক্ত হচ্ছে..."
-        }
-
-        override fun onRmsChanged(rmsdB: Float) {}
-        override fun onBufferReceived(buffer: ByteArray?) {}
-
-        override fun onEndOfSpeech() {
-            statusText.text = "কথা শনাক্ত করা হচ্ছে..."
-        }
-
-        override fun onError(error: Int) {
-            statusText.text = when (error) {
-                SpeechRecognizer.ERROR_NO_MATCH ->
-                    "কোনো কথা শনাক্ত হয়নি"
-
-                SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
-                    "কোনো কথা শোনা যায়নি"
-
-                SpeechRecognizer.ERROR_NETWORK ->
-                    "Network error"
-
-                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
-                    "Microphone permission নেই"
-
-                else ->
-                    "Voice recognition error: $error"
+            override fun onReadyForSpeech(params: Bundle?) {
+                statusText.text =
+                    "বলুন, আপনার কথা শুনছি..."
             }
-        }
 
-        override fun onResults(results: Bundle?) {
-
-            val matches = results?.getStringArrayList(
-                SpeechRecognizer.RESULTS_RECOGNITION
-            )
-
-            if (!matches.isNullOrEmpty()) {
-                inputText.setText(matches[0])
-                inputText.setSelection(inputText.text.length)
-                statusText.text = "কথা লেখায় রূপান্তর সম্পন্ন"
-            } else {
-                statusText.text = "কথা শনাক্ত করা যায়নি"
+            override fun onBeginningOfSpeech() {
+                statusText.text =
+                    "কথা শনাক্ত হচ্ছে..."
             }
-        }
 
-        override fun onPartialResults(partialResults: Bundle?) {
+            override fun onRmsChanged(rmsdB: Float) {}
 
-            val matches = partialResults?.getStringArrayList(
-                SpeechRecognizer.RESULTS_RECOGNITION
-            )
+            override fun onBufferReceived(buffer: ByteArray?) {}
 
-            if (!matches.isNullOrEmpty()) {
-                inputText.setText(matches[0])
-                inputText.setSelection(inputText.text.length)
+            override fun onEndOfSpeech() {
+                statusText.text =
+                    "কথা শনাক্ত করা হচ্ছে..."
             }
+
+            override fun onError(error: Int) {
+
+                statusText.text = when (error) {
+
+                    SpeechRecognizer.ERROR_NO_MATCH ->
+                        "কোনো কথা শনাক্ত হয়নি"
+
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
+                        "কোনো কথা শোনা যায়নি"
+
+                    SpeechRecognizer.ERROR_NETWORK ->
+                        "Network error"
+
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
+                        "Microphone permission নেই"
+
+                    else ->
+                        "Voice recognition error: $error"
+                }
+            }
+
+            override fun onResults(results: Bundle?) {
+
+                val matches = results?.getStringArrayList(
+                    SpeechRecognizer.RESULTS_RECOGNITION
+                )
+
+                if (!matches.isNullOrEmpty()) {
+
+                    inputText.setText(matches[0])
+
+                    inputText.setSelection(
+                        inputText.text.length
+                    )
+
+                    statusText.text =
+                        "কথা লেখায় রূপান্তর সম্পন্ন"
+
+                } else {
+
+                    statusText.text =
+                        "কথা শনাক্ত করা যায়নি"
+                }
+            }
+
+            override fun onPartialResults(
+                partialResults: Bundle?
+            ) {
+
+                val matches = partialResults?.getStringArrayList(
+                    SpeechRecognizer.RESULTS_RECOGNITION
+                )
+
+                if (!matches.isNullOrEmpty()) {
+
+                    inputText.setText(matches[0])
+
+                    inputText.setSelection(
+                        inputText.text.length
+                    )
+                }
+            }
+
+            override fun onEvent(
+                eventType: Int,
+                params: Bundle?
+            ) {}
         }
 
-        override fun onEvent(
-            eventType: Int,
-            params: Bundle?
-        ) {}
-    }
+    // ==========================================
+    // TRANSLATION
+    // ==========================================
 
     private fun translateText() {
 
-        val original = inputText.text.toString().trim()
+        val original =
+            inputText.text.toString().trim()
 
         if (original.isEmpty()) {
-            inputText.error = "বাংলা লেখা লিখুন"
+
+            inputText.error =
+                "বাংলা লেখা লিখুন"
+
             return
         }
 
         resultLayout.removeAllViews()
-        statusText.text = "অনুবাদ হচ্ছে..."
+
+        statusText.text =
+            "অনুবাদ হচ্ছে..."
 
         val loading = TextView(this).apply {
             text = "Please wait..."
@@ -531,15 +736,20 @@ class MainActivity : ComponentActivity() {
 
                 runOnUiThread {
 
-                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    if (isFinishing || isDestroyed) {
+                        return@runOnUiThread
+                    }
 
-                    if (resultLayout.indexOfChild(loading) >= 0) {
+                    if (
+                        resultLayout.indexOfChild(loading) >= 0
+                    ) {
                         resultLayout.removeView(loading)
                     }
 
                     val card = LinearLayout(this).apply {
                         orientation = LinearLayout.VERTICAL
                         setPadding(14, 14, 14, 14)
+
                         setBackgroundColor(
                             Color.rgb(242, 246, 250)
                         )
@@ -548,7 +758,9 @@ class MainActivity : ComponentActivity() {
                     val languageTitle = TextView(this).apply {
                         text = language.first
                         textSize = 18f
-                        setTextColor(Color.rgb(20, 75, 130))
+                        setTextColor(
+                            Color.rgb(20, 75, 130)
+                        )
                     }
 
                     val translatedText =
@@ -562,8 +774,12 @@ class MainActivity : ComponentActivity() {
                     }
 
                     val copyButton = Button(this).apply {
-                        text = "COPY ${language.first.uppercase()}"
-                        isEnabled = translated != null
+
+                        text =
+                            "COPY ${language.first.uppercase()}"
+
+                        isEnabled =
+                            translated != null
 
                         setOnClickListener {
 
@@ -591,16 +807,21 @@ class MainActivity : ComponentActivity() {
                     card.addView(result)
                     card.addView(copyButton)
 
-                    val params = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    )
+                    val params =
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        )
 
                     params.setMargins(0, 6, 0, 6)
+
                     resultLayout.addView(card, params)
 
-                    if (resultLayout.childCount >= languages.size) {
-                        statusText.text = "অনুবাদ সম্পন্ন"
+                    if (
+                        resultLayout.childCount >= languages.size
+                    ) {
+                        statusText.text =
+                            "অনুবাদ সম্পন্ন"
                     }
                 }
             }
@@ -616,7 +837,8 @@ class MainActivity : ComponentActivity() {
 
         return try {
 
-            val query = URLEncoder.encode(text, "UTF-8")
+            val query =
+                URLEncoder.encode(text, "UTF-8")
 
             val address =
                 "https://api.mymemory.translated.net/get" +
@@ -640,8 +862,11 @@ class MainActivity : ComponentActivity() {
                 ?.optString("translatedText")
 
             if (translated.isNullOrBlank()) {
+
                 null
+
             } else {
+
                 Html.fromHtml(
                     translated,
                     Html.FROM_HTML_MODE_LEGACY
@@ -649,22 +874,31 @@ class MainActivity : ComponentActivity() {
             }
 
         } catch (e: Exception) {
+
             null
+
         } finally {
+
             connection?.disconnect()
         }
     }
+
+    // ==========================================
+    // CLEANUP
+    // ==========================================
 
     @Suppress("DEPRECATION")
     override fun onDestroy() {
 
         try {
+
             callListener?.let {
                 telephonyManager?.listen(
                     it,
                     PhoneStateListener.LISTEN_NONE
                 )
             }
+
         } catch (_: Exception) {
         }
 
@@ -673,6 +907,7 @@ class MainActivity : ComponentActivity() {
         }
 
         executor.shutdownNow()
+
         super.onDestroy()
     }
 }
