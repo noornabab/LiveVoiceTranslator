@@ -17,6 +17,8 @@ import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.*
 import android.text.Html
+import android.telephony.PhoneStateListener
+import android.telephony.TelephonyManager
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -33,8 +35,11 @@ class MainActivity : ComponentActivity() {
     private lateinit var resultLayout: LinearLayout
     private lateinit var speechRecognizer: SpeechRecognizer
 
-    private val executor = Executors.newFixedThreadPool(4)
+    private var telephonyManager: TelephonyManager? = null
+    private var callListener: PhoneStateListener? = null
     private var pendingBackgroundStart = false
+
+    private val executor = Executors.newFixedThreadPool(4)
 
     private val languages = listOf(
         "English" to "en",
@@ -66,6 +71,19 @@ class MainActivity : ComponentActivity() {
             startBackgroundService()
         }
 
+    private val callPermissionLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            if (granted) {
+                registerCallListener()
+                statusText.text = "Phone Call Detection চালু হয়েছে"
+            } else {
+                statusText.text =
+                    "Phone Call Detection-এর Permission দেওয়া হয়নি"
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -78,6 +96,81 @@ class MainActivity : ComponentActivity() {
             speechRecognizer.setRecognitionListener(speechListener)
         } else {
             statusText.text = "Speech recognition unavailable"
+        }
+
+        checkCallPermission()
+    }
+
+    private fun checkCallPermission() {
+        if (
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.READ_PHONE_STATE
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            registerCallListener()
+        } else {
+            callPermissionLauncher.launch(
+                Manifest.permission.READ_PHONE_STATE
+            )
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun registerCallListener() {
+
+        if (
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.READ_PHONE_STATE
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+
+        try {
+            telephonyManager =
+                getSystemService(Context.TELEPHONY_SERVICE)
+                    as TelephonyManager
+
+            callListener = object : PhoneStateListener() {
+
+                override fun onCallStateChanged(
+                    state: Int,
+                    phoneNumber: String?
+                ) {
+                    super.onCallStateChanged(state, phoneNumber)
+
+                    runOnUiThread {
+                        when (state) {
+
+                            TelephonyManager.CALL_STATE_RINGING -> {
+                                statusText.text =
+                                    "📞 INCOMING CALL - ফোনে কল এসেছে"
+                            }
+
+                            TelephonyManager.CALL_STATE_OFFHOOK -> {
+                                statusText.text =
+                                    "📞 CALL CONNECTED - Speaker চালু করুন"
+                            }
+
+                            TelephonyManager.CALL_STATE_IDLE -> {
+                                statusText.text =
+                                    "CALL ENDED / ফোন এখন Idle"
+                            }
+                        }
+                    }
+                }
+            }
+
+            telephonyManager?.listen(
+                callListener,
+                PhoneStateListener.LISTEN_CALL_STATE
+            )
+
+        } catch (e: Exception) {
+            statusText.text =
+                "Call Detection Error: ${e.message}"
         }
     }
 
@@ -297,7 +390,8 @@ class MainActivity : ComponentActivity() {
 
         startService(serviceIntent)
 
-        statusText.text = "Background service বন্ধ করার অনুরোধ পাঠানো হয়েছে"
+        statusText.text =
+            "Background service বন্ধ করার অনুরোধ পাঠানো হয়েছে"
     }
 
     private fun startListening() {
@@ -561,7 +655,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @Suppress("DEPRECATION")
     override fun onDestroy() {
+
+        try {
+            callListener?.let {
+                telephonyManager?.listen(
+                    it,
+                    PhoneStateListener.LISTEN_NONE
+                )
+            }
+        } catch (_: Exception) {
+        }
 
         if (::speechRecognizer.isInitialized) {
             speechRecognizer.destroy()
