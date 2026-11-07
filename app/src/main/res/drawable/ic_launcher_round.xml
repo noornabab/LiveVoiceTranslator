@@ -1,1 +1,42 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
 
+    <!-- Globe -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:pathData="M54,17 C74.4,17 91,33.6 91,54 C91,74.4 74.4,91 54,91 C33.6,91 17,74.4 17,54 C17,33.6 33.6,17 54,17 Z" />
+
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#55E6FF"
+        android:strokeWidth="2.5"
+        android:pathData="M17,54 L91,54 M54,17 C34,34 34,74 54,91 M54,17 C74,34 74,74 54,91" />
+
+    <!-- Microphone -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M49,32 C49,25 59,25 59,32 L59,53 C59,60 49,60 49,53 Z" />
+
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:pathData="M42,48 L42,53 C42,69 66,69 66,53 L66,48" />
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M52,65 L56,65 L56,76 L52,76 Z M45,76 L63,76 L63,80 L45,80 Z" />
+
+    <!-- Sound waves -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFD166"
+        android:strokeWidth="3"
+        android:pathData="M34,38 Q27,53 34,67 M74,38 Q81,53 74,67" />
+
+</vector>
