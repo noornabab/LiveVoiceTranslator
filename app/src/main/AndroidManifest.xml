@@ -2,23 +2,24 @@
 
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Internet -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Microphone -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
-    <!-- Phone Call Detection -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
-    <!-- Foreground Service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
-    <!-- Notification -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Floating Popup -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <uses-feature
@@ -44,13 +45,11 @@
 
         </activity>
 
-        <!-- Background Microphone Service -->
         <service
             android:name=".VoiceForegroundService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
-        <!-- Floating Translation Popup -->
         <service
             android:name=".FloatingTranslatorService"
             android:exported="false" />
