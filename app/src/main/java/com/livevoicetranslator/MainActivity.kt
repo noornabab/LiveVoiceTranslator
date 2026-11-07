@@ -7,6 +7,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -33,6 +34,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var speechRecognizer: SpeechRecognizer
 
     private val executor = Executors.newFixedThreadPool(4)
+    private var pendingBackgroundStart = false
 
     private val languages = listOf(
         "English" to "en",
@@ -45,17 +47,34 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
-            if (granted) startListening()
-            else statusText.text = "Microphone permission প্রয়োজন"
+            if (granted) {
+                if (pendingBackgroundStart) {
+                    pendingBackgroundStart = false
+                    requestNotificationAndStart()
+                } else {
+                    startListening()
+                }
+            } else {
+                statusText.text = "Microphone permission প্রয়োজন"
+            }
+        }
+
+    private val notificationLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) {
+            startBackgroundService()
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         createInterface()
 
         if (SpeechRecognizer.isRecognitionAvailable(this)) {
             speechRecognizer =
                 SpeechRecognizer.createSpeechRecognizer(this)
+
             speechRecognizer.setRecognitionListener(speechListener)
         } else {
             statusText.text = "Speech recognition unavailable"
@@ -63,6 +82,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createInterface() {
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(24, 30, 24, 24)
@@ -70,6 +90,7 @@ class MainActivity : ComponentActivity() {
         }
 
         val scroll = ScrollView(this)
+
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -108,7 +129,9 @@ class MainActivity : ComponentActivity() {
 
         val listenButton = Button(this).apply {
             text = "🎙 START LISTENING"
-            setOnClickListener { checkPermissionAndListen() }
+            setOnClickListener {
+                checkPermissionAndListen()
+            }
         }
 
         val stopButton = Button(this).apply {
@@ -121,9 +144,25 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        val backgroundButton = Button(this).apply {
+            text = "▶ START BACKGROUND"
+            setOnClickListener {
+                checkPermissionAndStartBackground()
+            }
+        }
+
+        val stopBackgroundButton = Button(this).apply {
+            text = "■ STOP BACKGROUND"
+            setOnClickListener {
+                stopBackgroundService()
+            }
+        }
+
         val translateButton = Button(this).apply {
             text = "TRANSLATE"
-            setOnClickListener { translateText() }
+            setOnClickListener {
+                translateText()
+            }
         }
 
         statusText = TextView(this).apply {
@@ -151,6 +190,8 @@ class MainActivity : ComponentActivity() {
         content.addView(inputText)
         content.addView(listenButton)
         content.addView(stopButton)
+        content.addView(backgroundButton)
+        content.addView(stopBackgroundButton)
         content.addView(translateButton)
         content.addView(statusText)
         content.addView(resultTitle)
@@ -179,11 +220,88 @@ class MainActivity : ComponentActivity() {
         ) {
             startListening()
         } else {
-            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            pendingBackgroundStart = false
+            permissionLauncher.launch(
+                Manifest.permission.RECORD_AUDIO
+            )
         }
     }
 
+    private fun checkPermissionAndStartBackground() {
+
+        if (
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingBackgroundStart = true
+            permissionLauncher.launch(
+                Manifest.permission.RECORD_AUDIO
+            )
+            return
+        }
+
+        requestNotificationAndStart()
+    }
+
+    private fun requestNotificationAndStart() {
+
+        if (
+            Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationLauncher.launch(
+                Manifest.permission.POST_NOTIFICATIONS
+            )
+        } else {
+            startBackgroundService()
+        }
+    }
+
+    private fun startBackgroundService() {
+
+        try {
+            val serviceIntent = Intent(
+                this,
+                VoiceForegroundService::class.java
+            ).apply {
+                action = VoiceForegroundService.ACTION_START
+            }
+
+            ContextCompat.startForegroundService(
+                this,
+                serviceIntent
+            )
+
+            statusText.text =
+                "Background microphone চালু করার অনুরোধ পাঠানো হয়েছে"
+
+        } catch (e: Exception) {
+            statusText.text =
+                "Background service চালু করা যায়নি: ${e.message}"
+        }
+    }
+
+    private fun stopBackgroundService() {
+
+        val serviceIntent = Intent(
+            this,
+            VoiceForegroundService::class.java
+        ).apply {
+            action = VoiceForegroundService.ACTION_STOP
+        }
+
+        startService(serviceIntent)
+
+        statusText.text = "Background service বন্ধ করার অনুরোধ পাঠানো হয়েছে"
+    }
+
     private fun startListening() {
+
         if (!::speechRecognizer.isInitialized) {
             statusText.text = "Speech recognition unavailable"
             return
@@ -196,9 +314,18 @@ class MainActivity : ComponentActivity() {
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                 RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
             )
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "bn-BD")
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "bn-BD")
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE,
+                "bn-BD"
+            )
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE,
+                "bn-BD"
+            )
+            putExtra(
+                RecognizerIntent.EXTRA_PARTIAL_RESULTS,
+                true
+            )
         }
 
         try {
@@ -230,17 +357,23 @@ class MainActivity : ComponentActivity() {
             statusText.text = when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH ->
                     "কোনো কথা শনাক্ত হয়নি"
+
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
                     "কোনো কথা শোনা যায়নি"
+
                 SpeechRecognizer.ERROR_NETWORK ->
                     "Network error"
+
                 SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
                     "Microphone permission নেই"
-                else -> "Voice recognition error: $error"
+
+                else ->
+                    "Voice recognition error: $error"
             }
         }
 
         override fun onResults(results: Bundle?) {
+
             val matches = results?.getStringArrayList(
                 SpeechRecognizer.RESULTS_RECOGNITION
             )
@@ -255,6 +388,7 @@ class MainActivity : ComponentActivity() {
         }
 
         override fun onPartialResults(partialResults: Bundle?) {
+
             val matches = partialResults?.getStringArrayList(
                 SpeechRecognizer.RESULTS_RECOGNITION
             )
@@ -265,10 +399,14 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        override fun onEvent(eventType: Int, params: Bundle?) {}
+        override fun onEvent(
+            eventType: Int,
+            params: Bundle?
+        ) {}
     }
 
     private fun translateText() {
+
         val original = inputText.text.toString().trim()
 
         if (original.isEmpty()) {
@@ -289,10 +427,18 @@ class MainActivity : ComponentActivity() {
         resultLayout.addView(loading)
 
         languages.forEach { language ->
+
             executor.execute {
-                val translated = translate(original, language.second)
+
+                val translated = translate(
+                    original,
+                    language.second
+                )
 
                 runOnUiThread {
+
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+
                     if (resultLayout.indexOfChild(loading) >= 0) {
                         resultLayout.removeView(loading)
                     }
@@ -300,7 +446,9 @@ class MainActivity : ComponentActivity() {
                     val card = LinearLayout(this).apply {
                         orientation = LinearLayout.VERTICAL
                         setPadding(14, 14, 14, 14)
-                        setBackgroundColor(Color.rgb(242, 246, 250))
+                        setBackgroundColor(
+                            Color.rgb(242, 246, 250)
+                        )
                     }
 
                     val languageTitle = TextView(this).apply {
@@ -309,7 +457,8 @@ class MainActivity : ComponentActivity() {
                         setTextColor(Color.rgb(20, 75, 130))
                     }
 
-                    val translatedText = translated ?: "অনুবাদ পাওয়া যায়নি"
+                    val translatedText =
+                        translated ?: "অনুবাদ পাওয়া যায়নি"
 
                     val result = TextView(this).apply {
                         text = translatedText
@@ -323,6 +472,7 @@ class MainActivity : ComponentActivity() {
                         isEnabled = translated != null
 
                         setOnClickListener {
+
                             val clipboard =
                                 getSystemService(
                                     Context.CLIPBOARD_SERVICE
@@ -367,9 +517,11 @@ class MainActivity : ComponentActivity() {
         text: String,
         targetLanguage: String
     ): String? {
+
         var connection: HttpURLConnection? = null
 
         return try {
+
             val query = URLEncoder.encode(text, "UTF-8")
 
             val address =
@@ -401,6 +553,7 @@ class MainActivity : ComponentActivity() {
                     Html.FROM_HTML_MODE_LEGACY
                 ).toString()
             }
+
         } catch (e: Exception) {
             null
         } finally {
@@ -409,9 +562,11 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+
         if (::speechRecognizer.isInitialized) {
             speechRecognizer.destroy()
         }
+
         executor.shutdownNow()
         super.onDestroy()
     }
