@@ -8,6 +8,9 @@
     <!-- Microphone -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- Phone Call Detection -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+
     <!-- Foreground Service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
