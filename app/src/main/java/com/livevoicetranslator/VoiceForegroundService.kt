@@ -35,14 +35,11 @@ class VoiceForegroundService : Service() {
     }
 
     private var speechRecognizer: SpeechRecognizer? = null
-
     private var listeningEnabled = false
     private var foregroundStarted = false
-
     private var sourceLanguage = "und"
 
     private val handler = Handler(Looper.getMainLooper())
-
     private val executor = Executors.newSingleThreadExecutor()
 
     private val restartRunnable = Runnable {
@@ -115,7 +112,7 @@ class VoiceForegroundService : Service() {
 
             val manager =
                 getSystemService(NOTIFICATION_SERVICE)
-                        as NotificationManager
+                    as NotificationManager
 
             manager.createNotificationChannel(channel)
         }
@@ -180,7 +177,7 @@ class VoiceForegroundService : Service() {
 
         val manager =
             getSystemService(NOTIFICATION_SERVICE)
-                    as NotificationManager
+                as NotificationManager
 
         manager.notify(
             NOTIFICATION_ID,
@@ -223,8 +220,6 @@ class VoiceForegroundService : Service() {
                     RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
                 )
 
-                // No fixed English language preference.
-                // Let the recognition provider choose the language.
                 putExtra(
                     RecognizerIntent.EXTRA_LANGUAGE,
                     "und"
@@ -376,7 +371,9 @@ class VoiceForegroundService : Service() {
                 if (recognizedText.isNotBlank()) {
                     handleRecognizedText(recognizedText)
                 } else {
-                    updateNotification("No speech result. Listening again...")
+                    updateNotification(
+                        "No speech result. Listening again..."
+                    )
                 }
 
                 scheduleRestart(800)
@@ -485,7 +482,8 @@ class VoiceForegroundService : Service() {
 
         executor.execute {
 
-            val translatedText: String
+            // FIX: var ব্যবহার করা হয়েছে
+            var translatedText = ""
 
             try {
 
