@@ -8,14 +8,24 @@ import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.view.Gravity
 import android.view.WindowManager
 import android.view.WindowManager.LayoutParams
+import android.view.inputmethod.InputMethodManager
+import android.content.Context
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
-import android.view.View
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import java.util.concurrent.Executors
 
 class FloatingTranslatorService : Service() {
 
@@ -29,12 +39,17 @@ class FloatingTranslatorService : Service() {
     }
 
     private lateinit var windowManager: WindowManager
-    private var floatingView: LinearLayout? = null
-    private var messageView: TextView? = null
-    private var statusView: TextView? = null
-    private var expanded = true
-
     private lateinit var params: LayoutParams
+
+    private var floatingView: LinearLayout? = null
+    private var statusView: TextView? = null
+    private var speechView: TextView? = null
+    private var inputView: EditText? = null
+    private var englishView: TextView? = null
+    private var translateButton: Button? = null
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val executor = Executors.newSingleThreadExecutor()
 
     override fun onCreate() {
         super.onCreate()
@@ -58,11 +73,15 @@ class FloatingTranslatorService : Service() {
 
             ACTION_UPDATE -> {
                 intent.getStringExtra(EXTRA_MESSAGE)?.let {
-                    messageView?.text = it
+                    speechView?.text = it
                 }
 
                 intent.getStringExtra(EXTRA_STATUS)?.let {
                     statusView?.text = it
+                }
+
+                if (floatingView == null) {
+                    showFloatingWindow()
                 }
             }
 
@@ -85,14 +104,18 @@ class FloatingTranslatorService : Service() {
             return
         }
 
+        val scrollView = ScrollView(this)
+
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(18, 16, 18, 16)
+            setPadding(18, 16, 18, 18)
+
             background = GradientDrawable().apply {
                 setColor(Color.rgb(9, 30, 65))
                 cornerRadius = 24f
                 setStroke(2, Color.rgb(35, 130, 210))
             }
+
             elevation = 12f
         }
 
@@ -112,7 +135,7 @@ class FloatingTranslatorService : Service() {
             text = "−"
             textSize = 18f
             setOnClickListener {
-                toggleSize()
+                toggleContent()
             }
         }
 
@@ -138,95 +161,235 @@ class FloatingTranslatorService : Service() {
             setPadding(0, 10, 0, 12)
         }
 
-        val divider = View(this).apply {
+        val divider = TextView(this).apply {
             setBackgroundColor(Color.rgb(50, 90, 130))
+            height = 1
         }
 
-        val translationTitle = TextView(this).apply {
-            text = "বাংলা অনুবাদ"
-            textSize = 15f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            setPadding(0, 12, 0, 8)
-        }
+        val speechTitle = makeTitle("৫ ভাষা থেকে বাংলা অনুবাদ")
 
-        messageView = TextView(this).apply {
-            text = "অপর পাশের কথা এখানে দেখা যাবে..."
-            textSize = 20f
+        speechView = TextView(this).apply {
+            text = "অন্য পক্ষের কথা এখানে বাংলায় দেখা যাবে..."
+            textSize = 19f
             setTextColor(Color.WHITE)
-            setPadding(0, 8, 0, 12)
+            setPadding(0, 10, 0, 18)
             minLines = 3
+        }
+
+        val secondDivider = TextView(this).apply {
+            setBackgroundColor(Color.rgb(50, 90, 130))
+            height = 1
+        }
+
+        val inputTitle = makeTitle("বাংলা লিখুন → English")
+
+        inputView = EditText(this).apply {
+            hint = "এখানে বাংলা লিখুন..."
+            textSize = 17f
+            setTextColor(Color.BLACK)
+            setHintTextColor(Color.DKGRAY)
+            setPadding(14, 12, 14, 12)
+            minLines = 2
+            maxLines = 4
+            gravity = Gravity.TOP
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = 12f
+            }
+        }
+
+        translateButton = Button(this).apply {
+            text = "Translate to English"
+            textSize = 15f
+            setOnClickListener {
+                translateBanglaToEnglish()
+            }
+        }
+
+        val resultTitle = makeTitle("English Translation")
+
+        englishView = TextView(this).apply {
+            text = "English translation will appear here..."
+            textSize = 18f
+            setTextColor(Color.WHITE)
+            setPadding(0, 10, 0, 14)
+            minLines = 2
         }
 
         container.addView(header)
         container.addView(statusView)
-        container.addView(
-            divider,
-            LinearLayout.LayoutParams(-1, 1)
-        )
-        container.addView(translationTitle)
-        container.addView(messageView)
+        container.addView(divider)
+        container.addView(speechTitle)
+        container.addView(speechView)
+        container.addView(secondDivider)
+        container.addView(inputTitle)
 
+        container.addView(
+            inputView,
+            LinearLayout.LayoutParams(
+                -1,
+                -2
+            ).apply {
+                topMargin = 8
+            }
+        )
+
+        container.addView(
+            translateButton,
+            LinearLayout.LayoutParams(
+                -1,
+                -2
+            ).apply {
+                topMargin = 8
+            }
+        )
+
+        container.addView(resultTitle)
+        container.addView(englishView)
+
+        scrollView.addView(container)
         floatingView = container
 
         params = LayoutParams(
             (resources.displayMetrics.widthPixels * 0.92f).toInt(),
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            (resources.displayMetrics.heightPixels * 0.78f).toInt(),
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 LayoutParams.TYPE_APPLICATION_OVERLAY
             } else {
                 LayoutParams.TYPE_PHONE
             },
-            LayoutParams.FLAG_NOT_FOCUSABLE or
-                LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            y = 100
+            y = 70
+            softInputMode =
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
 
         try {
-            windowManager.addView(container, params)
+            windowManager.addView(scrollView, params)
+            floatingView = container
+            overlayRoot = scrollView
         } catch (e: Exception) {
             floatingView = null
+            overlayRoot = null
             stopSelf()
         }
     }
 
-    private fun toggleSize() {
+    private var overlayRoot: ScrollView? = null
+    private var contentVisible = true
 
-        val view = floatingView ?: return
+    private fun makeTitle(value: String): TextView {
+        return TextView(this).apply {
+            text = value
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.rgb(100, 220, 255))
+            setPadding(0, 14, 0, 6)
+        }
+    }
 
-        expanded = !expanded
+    private fun translateBanglaToEnglish() {
 
-        messageView?.visibility =
-            if (expanded) View.VISIBLE else View.GONE
+        val original = inputView?.text?.toString()?.trim().orEmpty()
 
-        try {
-            windowManager.updateViewLayout(view, params)
-        } catch (_: Exception) {
+        if (original.isBlank()) {
+            englishView?.text = "আগে বাংলা লিখুন।"
+            return
+        }
+
+        translateButton?.isEnabled = false
+        translateButton?.text = "Translating..."
+        englishView?.text = "অনুবাদ হচ্ছে..."
+
+        executor.execute {
+
+            var result = ""
+
+            try {
+                val encoded = URLEncoder.encode(
+                    original,
+                    "UTF-8"
+                )
+
+                val url = URL(
+                    "https://api.mymemory.translated.net/get?q=" +
+                        encoded +
+                        "&langpair=bn|en"
+                )
+
+                val connection =
+                    url.openConnection() as HttpURLConnection
+
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 15000
+                connection.readTimeout = 15000
+
+                val response = connection.inputStream
+                    .bufferedReader()
+                    .use { it.readText() }
+
+                connection.disconnect()
+
+                val json = JSONObject(response)
+                result = json
+                    .getJSONObject("responseData")
+                    .getString("translatedText")
+
+                if (result.isBlank()) {
+                    result = "অনুবাদ পাওয়া যায়নি। আবার চেষ্টা করুন।"
+                }
+
+            } catch (e: Exception) {
+                result = "অনুবাদ করা যায়নি। ইন্টারনেট সংযোগ পরীক্ষা করুন।"
+            }
+
+            mainHandler.post {
+                englishView?.text = result
+                translateButton?.isEnabled = true
+                translateButton?.text = "Translate to English"
+            }
+        }
+    }
+
+    private fun toggleContent() {
+        contentVisible = !contentVisible
+
+        val root = overlayRoot ?: return
+
+        if (contentVisible) {
+            root.visibility = android.view.View.VISIBLE
+        } else {
+            root.visibility = android.view.View.GONE
         }
     }
 
     private fun removeFloatingWindow() {
-        floatingView?.let {
+
+        overlayRoot?.let {
             try {
                 windowManager.removeView(it)
             } catch (_: Exception) {
             }
         }
 
+        overlayRoot = null
         floatingView = null
-        messageView = null
         statusView = null
+        speechView = null
+        inputView = null
+        englishView = null
+        translateButton = null
     }
 
     override fun onDestroy() {
         removeFloatingWindow()
+        executor.shutdownNow()
         super.onDestroy()
     }
 
-    override fun onBind(intent: Intent?): IBinder? {
-        return null
-    }
+    override fun onBind(intent: Intent?): IBinder? = null
 }
