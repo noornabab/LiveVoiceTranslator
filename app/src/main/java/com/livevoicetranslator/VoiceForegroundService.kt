@@ -30,37 +30,44 @@ import java.util.concurrent.atomic.AtomicInteger
 class VoiceForegroundService : Service() {
 
     companion object {
+
+        const val ACTION_PREPARE = "PREPARE_VOICE_SERVICE"
         const val ACTION_START = "START_VOICE_SERVICE"
+        const val ACTION_STOP_LISTENING = "STOP_CALL_LISTENING"
         const val ACTION_STOP = "STOP_VOICE_SERVICE"
 
-        private const val CHANNEL_ID = "voice_translator_channel"
+        private const val CHANNEL_ID =
+            "voice_translator_channel"
+
         private const val NOTIFICATION_ID = 1001
     }
 
-    private val handler = Handler(Looper.getMainLooper())
+    private val handler =
+        Handler(Looper.getMainLooper())
 
-    private val executor = Executors.newSingleThreadExecutor()
+    private val executor =
+        Executors.newSingleThreadExecutor()
 
-    private val translationId = AtomicInteger(0)
+    private val translationId =
+        AtomicInteger(0)
 
     private var speechRecognizer: SpeechRecognizer? = null
 
     private var listening = false
+    private var foregroundStarted = false
+
     private var sourceLanguage = "en"
-    private var lastPartialText = ""
 
     private var restartRunnable: Runnable? = null
-
-    private val partialTranslation = Runnable {
-        if (lastPartialText.isNotBlank()) {
-            translateText(lastPartialText, sourceLanguage)
-        }
-    }
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
     }
+
+    // =====================================
+    // SERVICE COMMANDS
+    // =====================================
 
     override fun onStartCommand(
         intent: Intent?,
@@ -68,62 +75,164 @@ class VoiceForegroundService : Service() {
         startId: Int
     ): Int {
 
-        if (intent?.action == ACTION_STOP) {
-            stopListening()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
-        }
+        when (intent?.action) {
 
-        if (
-            checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
+            ACTION_STOP -> {
 
-        try {
+                stopListening()
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    createNotification("Starting automatic translation..."),
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                )
-            } else {
-                startForeground(
-                    NOTIFICATION_ID,
-                    createNotification("Starting automatic translation...")
-                )
-            }
+                if (foregroundStarted) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    foregroundStarted = false
+                }
 
-            if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-                updateNotification("Speech Recognition unavailable")
                 stopSelf()
+
                 return START_NOT_STICKY
             }
 
-            if (!listening) {
-                listening = true
-                startRecognition(true)
+            ACTION_STOP_LISTENING -> {
+
+                stopListening()
+
+                updateNotification(
+                    "কল নেই। Listening বন্ধ।"
+                )
+
+                return START_NOT_STICKY
             }
 
-        } catch (e: Exception) {
-            updateNotification("Service Error: ${e.message}")
-            stopSelf()
-        }
+            ACTION_PREPARE -> {
 
-        return START_NOT_STICKY
+                if (!ensureForeground()) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+
+                updateNotification(
+                    "প্রস্তুত। কলের অপেক্ষায়..."
+                )
+
+                return START_STICKY
+            }
+
+            ACTION_START -> {
+
+                if (!ensureForeground()) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+
+                if (
+                    checkSelfPermission(
+                        Manifest.permission.RECORD_AUDIO
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    updateNotification(
+                        "Microphone permission প্রয়োজন"
+                    )
+                    return START_NOT_STICKY
+                }
+
+                if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+                    updateNotification(
+                        "Speech Recognition unavailable"
+                    )
+                    return START_NOT_STICKY
+                }
+
+                if (!listening) {
+                    listening = true
+                    sourceLanguage = "en"
+                    startRecognition(true)
+                }
+
+                return START_STICKY
+            }
+
+            else -> {
+
+                if (!ensureForeground()) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+
+                return START_STICKY
+            }
+        }
     }
 
-    private fun startRecognition(recreate: Boolean = false) {
+    // =====================================
+    // FOREGROUND SERVICE
+    // =====================================
+
+    private fun ensureForeground(): Boolean {
+
+        if (foregroundStarted) {
+            return true
+        }
+
+        if (
+            checkSelfPermission(
+                Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return false
+        }
+
+        return try {
+
+            val notification =
+                createNotification(
+                    "প্রস্তুত। কলের অপেক্ষায়..."
+                )
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                )
+
+            } else {
+
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification
+                )
+            }
+
+            foregroundStarted = true
+
+            true
+
+        } catch (e: Exception) {
+
+            updateNotification(
+                "Foreground Error: ${e.message}"
+            )
+
+            false
+        }
+    }
+
+    // =====================================
+    // SPEECH RECOGNITION
+    // =====================================
+
+    private fun startRecognition(
+        recreate: Boolean = false
+    ) {
 
         if (!listening) return
 
         try {
 
-            if (recreate || speechRecognizer == null) {
+            if (
+                recreate ||
+                speechRecognizer == null
+            ) {
 
                 speechRecognizer?.destroy()
 
@@ -190,10 +299,12 @@ class VoiceForegroundService : Service() {
             }
 
             updateNotification(
-                "Automatic Listening: 5 Languages"
+                "কল চলাকালীন Listening চালু"
             )
 
-            speechRecognizer?.startListening(speechIntent)
+            speechRecognizer?.startListening(
+                speechIntent
+            )
 
         } catch (e: Exception) {
 
@@ -201,22 +312,32 @@ class VoiceForegroundService : Service() {
                 "Recognition Error: ${e.message}"
             )
 
-            scheduleRestart(11)
+            scheduleRestart(
+                SpeechRecognizer.ERROR_SERVER_DISCONNECTED
+            )
         }
     }
+
+    // =====================================
+    // RECOGNITION LISTENER
+    // =====================================
 
     private fun createRecognitionListener(): RecognitionListener {
 
         return object : RecognitionListener {
 
             override fun onReadyForSpeech(params: Bundle?) {
+
                 updateNotification(
-                    "Listening: English / Arabic / Hindi / Urdu / Bangla"
+                    "Listening: 5 Languages"
                 )
             }
 
             override fun onBeginningOfSpeech() {
-                updateNotification("Speech detected...")
+
+                updateNotification(
+                    "কথা শনাক্ত হচ্ছে..."
+                )
             }
 
             override fun onRmsChanged(rmsdB: Float) {}
@@ -224,42 +345,56 @@ class VoiceForegroundService : Service() {
             override fun onBufferReceived(buffer: ByteArray?) {}
 
             override fun onEndOfSpeech() {
-                updateNotification("Processing speech...")
+
+                updateNotification(
+                    "কথা প্রসেস হচ্ছে..."
+                )
             }
 
             override fun onError(error: Int) {
 
+                if (!listening) return
+
                 updateNotification(
                     when (error) {
+
                         SpeechRecognizer.ERROR_NO_MATCH ->
-                            "No speech match. Listening again..."
+                            "কথা শনাক্ত হয়নি। আবার চেষ্টা করছি..."
 
                         SpeechRecognizer.ERROR_SERVER_DISCONNECTED ->
-                            "Server disconnected. Reconnecting..."
+                            "Speech Server disconnected"
 
                         SpeechRecognizer.ERROR_NETWORK ->
-                            "Network error. Checking connection..."
+                            "Network Error"
 
                         SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
-                            "Network timeout. Retrying..."
+                            "Network Timeout"
 
                         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
-                            "Microphone permission required"
+                            "Microphone permission নেই"
 
                         SpeechRecognizer.ERROR_RECOGNIZER_BUSY ->
-                            "Recognizer busy. Retrying..."
+                            "Recognizer busy"
 
                         else ->
                             "Speech Error Code: $error"
                     }
                 )
 
-                if (listening) {
-                    scheduleRestart(error)
+                if (
+                    error ==
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS
+                ) {
+                    stopListening()
+                    return
                 }
+
+                scheduleRestart(error)
             }
 
-            override fun onLanguageDetection(results: Bundle) {
+            override fun onLanguageDetection(
+                results: Bundle
+            ) {
 
                 if (Build.VERSION.SDK_INT >= 34) {
 
@@ -269,10 +404,11 @@ class VoiceForegroundService : Service() {
 
                     if (!detected.isNullOrBlank()) {
 
-                        sourceLanguage = languageCode(detected)
+                        sourceLanguage =
+                            languageCode(detected)
 
                         updateNotification(
-                            "Detected language: $detected"
+                            "Detected: $detected"
                         )
                     }
                 }
@@ -290,24 +426,15 @@ class VoiceForegroundService : Service() {
 
                 if (!text.isNullOrBlank()) {
 
-                    lastPartialText = text
-
                     updateNotification(
                         "Heard: $text"
-                    )
-
-                    handler.removeCallbacks(partialTranslation)
-
-                    handler.postDelayed(
-                        partialTranslation,
-                        1200
                     )
                 }
             }
 
             override fun onResults(results: Bundle?) {
 
-                handler.removeCallbacks(partialTranslation)
+                if (!listening) return
 
                 val text = results
                     ?.getStringArrayList(
@@ -317,17 +444,13 @@ class VoiceForegroundService : Service() {
 
                 if (!text.isNullOrBlank()) {
 
-                    lastPartialText = ""
-
                     translateText(
                         text,
                         sourceLanguage
                     )
                 }
 
-                if (listening) {
-                    scheduleRestart(0)
-                }
+                scheduleRestart(0)
             }
 
             override fun onEvent(
@@ -336,6 +459,10 @@ class VoiceForegroundService : Service() {
             ) {}
         }
     }
+
+    // =====================================
+    // RESTART RECOGNITION
+    // =====================================
 
     private fun scheduleRestart(error: Int) {
 
@@ -346,12 +473,22 @@ class VoiceForegroundService : Service() {
         }
 
         val delay = when (error) {
-            SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> 3000L
-            SpeechRecognizer.ERROR_NETWORK -> 4000L
-            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> 4000L
-            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> 2500L
-            SpeechRecognizer.ERROR_NO_MATCH -> 1200L
-            else -> 2000L
+
+            SpeechRecognizer.ERROR_SERVER_DISCONNECTED ->
+                3000L
+
+            SpeechRecognizer.ERROR_NETWORK,
+            SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
+                4000L
+
+            SpeechRecognizer.ERROR_RECOGNIZER_BUSY ->
+                2500L
+
+            SpeechRecognizer.ERROR_NO_MATCH ->
+                1200L
+
+            else ->
+                2000L
         }
 
         val recreate =
@@ -359,6 +496,7 @@ class VoiceForegroundService : Service() {
             error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
 
         restartRunnable = Runnable {
+
             if (listening) {
                 startRecognition(recreate)
             }
@@ -370,28 +508,40 @@ class VoiceForegroundService : Service() {
         )
     }
 
+    // =====================================
+    // LANGUAGE DETECTION
+    // =====================================
+
     private fun languageCode(tag: String): String {
 
         return when (
-            tag.lowercase(Locale.ROOT).substringBefore("-")
+            tag.lowercase(Locale.ROOT)
+                .substringBefore("-")
         ) {
+
             "en" -> "en"
             "ar" -> "ar"
             "hi" -> "hi"
             "ur" -> "ur"
             "bn" -> "bn"
+
             else -> "en"
         }
     }
+
+    // =====================================
+    // TRANSLATION
+    // =====================================
 
     private fun translateText(
         originalText: String,
         source: String
     ) {
 
-        val requestId = translationId.incrementAndGet()
+        val requestId =
+            translationId.incrementAndGet()
 
-        // Bengali: Show directly without translation.
+        // Bengali: show original text directly.
 
         if (source == "bn") {
 
@@ -401,14 +551,14 @@ class VoiceForegroundService : Service() {
             )
 
             updateNotification(
-                "Bengali: $originalText"
+                "বাংলা: $originalText"
             )
 
             return
         }
 
         updateNotification(
-            "Translating: $originalText"
+            "Translating to Bengali..."
         )
 
         executor.execute {
@@ -423,7 +573,8 @@ class VoiceForegroundService : Service() {
                 )
 
                 val address =
-                    "https://api.mymemory.translated.net/get?q=$encoded&langpair=$source%7Cbn"
+                    "https://api.mymemory.translated.net/get" +
+                    "?q=$encoded&langpair=$source%7Cbn"
 
                 val connection =
                     URL(address).openConnection()
@@ -441,7 +592,9 @@ class VoiceForegroundService : Service() {
 
                     val json = JSONObject(response)
 
-                    if (json.optInt("responseStatus") == 200) {
+                    if (
+                        json.optInt("responseStatus") == 200
+                    ) {
 
                         translated = json
                             .optJSONObject("responseData")
@@ -450,16 +603,20 @@ class VoiceForegroundService : Service() {
                     }
 
                 } finally {
+
                     connection.disconnect()
                 }
 
-            } catch (e: Exception) {
+            } catch (_: Exception) {
+
                 translated = ""
             }
 
             if (requestId == translationId.get()) {
 
                 handler.post {
+
+                    if (!listening) return@post
 
                     if (translated.isNotBlank()) {
 
@@ -469,13 +626,13 @@ class VoiceForegroundService : Service() {
                         )
 
                         updateNotification(
-                            "Bengali translation ready"
+                            "বাংলা অনুবাদ প্রস্তুত"
                         )
 
                     } else {
 
                         updateNotification(
-                            "Translation failed. Check internet."
+                            "অনুবাদ পাওয়া যায়নি। Internet পরীক্ষা করুন।"
                         )
                     }
                 }
@@ -483,12 +640,16 @@ class VoiceForegroundService : Service() {
         }
     }
 
+    // =====================================
+    // UPDATE FLOATING POPUP
+    // =====================================
+
     private fun showPopup(
         status: String,
         message: String
     ) {
 
-        val popupIntent = Intent(
+        val intent = Intent(
             this,
             FloatingTranslatorService::class.java
         ).apply {
@@ -508,11 +669,20 @@ class VoiceForegroundService : Service() {
         }
 
         try {
-            startService(popupIntent)
-        } catch (e: Exception) {
-            updateNotification("Popup update failed")
+
+            startService(intent)
+
+        } catch (_: Exception) {
+
+            updateNotification(
+                "Popup update failed"
+            )
         }
     }
+
+    // =====================================
+    // STOP MICROPHONE
+    // =====================================
 
     private fun stopListening() {
 
@@ -524,10 +694,22 @@ class VoiceForegroundService : Service() {
 
         restartRunnable = null
 
-        speechRecognizer?.cancel()
-        speechRecognizer?.destroy()
+        try {
+            speechRecognizer?.cancel()
+        } catch (_: Exception) {
+        }
+
+        try {
+            speechRecognizer?.destroy()
+        } catch (_: Exception) {
+        }
+
         speechRecognizer = null
     }
+
+    // =====================================
+    // NOTIFICATION CHANNEL
+    // =====================================
 
     private fun createNotificationChannel() {
 
@@ -540,13 +722,17 @@ class VoiceForegroundService : Service() {
             )
 
             channel.description =
-                "Automatic voice translation status"
+                "Call voice translation status"
 
             getSystemService(
                 NotificationManager::class.java
             ).createNotificationChannel(channel)
         }
     }
+
+    // =====================================
+    // NOTIFICATION
+    // =====================================
 
     private fun createNotification(
         message: String
@@ -555,28 +741,32 @@ class VoiceForegroundService : Service() {
         val stopIntent = Intent(
             this,
             VoiceForegroundService::class.java
-        ).setAction(ACTION_STOP)
+        ).apply {
+            action = ACTION_STOP
+        }
 
-        val stopPendingIntent = PendingIntent.getService(
-            this,
-            1002,
-            stopIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or
-                PendingIntent.FLAG_IMMUTABLE
-        )
+        val stopPendingIntent =
+            PendingIntent.getService(
+                this,
+                1002,
+                stopIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or
+                    PendingIntent.FLAG_IMMUTABLE
+            )
 
         val openIntent = Intent(
             this,
             MainActivity::class.java
         )
 
-        val openPendingIntent = PendingIntent.getActivity(
-            this,
-            1003,
-            openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or
-                PendingIntent.FLAG_IMMUTABLE
-        )
+        val openPendingIntent =
+            PendingIntent.getActivity(
+                this,
+                1003,
+                openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or
+                    PendingIntent.FLAG_IMMUTABLE
+            )
 
         return NotificationCompat.Builder(
             this,
@@ -593,13 +783,17 @@ class VoiceForegroundService : Service() {
             .setOngoing(true)
             .addAction(
                 android.R.drawable.ic_media_pause,
-                "STOP",
+                "STOP SERVICE",
                 stopPendingIntent
             )
             .build()
     }
 
-    private fun updateNotification(message: String) {
+    private fun updateNotification(
+        message: String
+    ) {
+
+        if (!foregroundStarted) return
 
         getSystemService(
             NotificationManager::class.java
@@ -609,11 +803,17 @@ class VoiceForegroundService : Service() {
         )
     }
 
+    // =====================================
+    // CLEANUP
+    // =====================================
+
     override fun onDestroy() {
 
         stopListening()
 
         executor.shutdownNow()
+
+        foregroundStarted = false
 
         super.onDestroy()
     }
