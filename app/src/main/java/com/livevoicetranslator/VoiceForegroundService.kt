@@ -35,29 +35,14 @@ class VoiceForegroundService : Service() {
 
         private const val PREFS_NAME = "LiveVoiceSettings"
         private const val PREF_LANGUAGE = "speech_language"
-
-        private const val EXTRA_ENABLE_LANGUAGE_DETECTION =
-            "android.speech.extra.ENABLE_LANGUAGE_DETECTION"
-
-        private const val EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES =
-            "android.speech.extra.LANGUAGE_DETECTION_ALLOWED_LANGUAGES"
-
-        private const val EXTRA_ENABLE_LANGUAGE_SWITCH =
-            "android.speech.extra.ENABLE_LANGUAGE_SWITCH"
-
-        private const val EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES =
-            "android.speech.extra.LANGUAGE_SWITCH_ALLOWED_LANGUAGES"
     }
 
     private var speechRecognizer: SpeechRecognizer? = null
-
     private var listeningEnabled = false
     private var foregroundStarted = false
-
     private var sourceLanguage = "und"
 
     private val handler = Handler(Looper.getMainLooper())
-
     private val executor = Executors.newSingleThreadExecutor()
 
     private val restartRunnable = Runnable {
@@ -93,16 +78,13 @@ class VoiceForegroundService : Service() {
                 sourceLanguage = "und"
 
                 handler.removeCallbacks(restartRunnable)
-
                 startRecognition()
             }
 
             ACTION_STOP_LISTENING -> {
 
                 listeningEnabled = false
-
                 handler.removeCallbacks(restartRunnable)
-
                 destroyRecognizer()
 
                 updateNotification("Listening paused")
@@ -112,9 +94,7 @@ class VoiceForegroundService : Service() {
             ACTION_STOP -> {
 
                 listeningEnabled = false
-
                 handler.removeCallbacks(restartRunnable)
-
                 destroyRecognizer()
 
                 if (foregroundStarted) {
@@ -223,13 +203,32 @@ class VoiceForegroundService : Service() {
 
     private fun getSelectedLanguage(): String {
 
-        return getSharedPreferences(
+        val savedLanguage = getSharedPreferences(
             PREFS_NAME,
             MODE_PRIVATE
         ).getString(
             PREF_LANGUAGE,
-            "auto"
-        ) ?: "auto"
+            "bn-BD"
+        ) ?: "bn-BD"
+
+        return when (savedLanguage) {
+            "bn-BD" -> "bn-BD"
+            "en-US" -> "en-US"
+            "ar-SA" -> "ar-SA"
+            "hi-IN" -> "hi-IN"
+            else -> "bn-BD"
+        }
+    }
+
+    private fun getLanguageName(language: String): String {
+
+        return when (language) {
+            "bn-BD" -> "বাংলা"
+            "en-US" -> "English"
+            "ar-SA" -> "العربية"
+            "hi-IN" -> "हिन्दी"
+            else -> "বাংলা"
+        }
     }
 
     private fun startRecognition() {
@@ -273,6 +272,11 @@ class VoiceForegroundService : Service() {
                 )
 
                 putExtra(
+                    RecognizerIntent.EXTRA_LANGUAGE,
+                    selectedLanguage
+                )
+
+                putExtra(
                     RecognizerIntent.EXTRA_PARTIAL_RESULTS,
                     true
                 )
@@ -287,59 +291,20 @@ class VoiceForegroundService : Service() {
                     packageName
                 )
 
-                if (selectedLanguage != "auto") {
-
-                    // নির্দিষ্ট ভাষা নির্বাচন করা হলে
-
-                    putExtra(
-                        RecognizerIntent.EXTRA_LANGUAGE,
-                        selectedLanguage
-                    )
-
-                } else if (Build.VERSION.SDK_INT >= 34) {
-
-                    // Auto Detect: চারটি ভাষা
-
-                    val languages = arrayListOf(
-                        "bn-BD",
-                        "en-US",
-                        "ar-SA",
-                        "hi-IN"
-                    )
-
-                    putExtra(
-                        EXTRA_ENABLE_LANGUAGE_DETECTION,
-                        true
-                    )
-
-                    putStringArrayListExtra(
-                        EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES,
-                        languages
-                    )
-
-                    putExtra(
-                        EXTRA_ENABLE_LANGUAGE_SWITCH,
-                        RecognizerIntent.LANGUAGE_SWITCH_BALANCED
-                    )
-
-                    putStringArrayListExtra(
-                        EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES,
-                        languages
-                    )
-                }
             }
 
             sourceLanguage = "und"
 
             speechRecognizer?.startListening(recognitionIntent)
 
-            val listeningMessage = when (selectedLanguage) {
-                "bn-BD" -> "বাংলা শুনছি..."
-                "en-US" -> "Listening in English..."
-                "ar-SA" -> "الاستماع باللغة العربية..."
-                "hi-IN" -> "हिन्दी सुन रहा हूँ..."
-                else -> "বাংলা, English, Arabic ও Hindi শুনছি..."
-            }
+            val listeningMessage =
+                when (selectedLanguage) {
+                    "bn-BD" -> "বাংলা শুনছি..."
+                    "en-US" -> "Listening in English..."
+                    "ar-SA" -> "الاستماع باللغة العربية..."
+                    "hi-IN" -> "हिन्दी सुन रहा हूँ..."
+                    else -> "কথা শুনছি..."
+                }
 
             updateNotification(listeningMessage)
             updatePopupStatus("🎙 $listeningMessage")
@@ -355,7 +320,6 @@ class VoiceForegroundService : Service() {
             )
 
             destroyRecognizer()
-
             scheduleRestart(2500)
         }
     }
@@ -393,7 +357,7 @@ class VoiceForegroundService : Service() {
                         "অডিও গ্রহণে সমস্যা হয়েছে"
 
                     SpeechRecognizer.ERROR_CLIENT ->
-                        "Speech client পুনরায় চালু হচ্ছে"
+                        "আবার শুনছি..."
 
                     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
                         "মাইক্রোফোন অনুমতি প্রয়োজন"
@@ -424,7 +388,13 @@ class VoiceForegroundService : Service() {
                 }
 
                 updateNotification(message)
-                updatePopupStatus(message)
+
+                if (
+                    error != SpeechRecognizer.ERROR_NO_MATCH &&
+                    error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+                ) {
+                    updatePopupStatus(message)
+                }
 
                 if (
                     error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED ||
@@ -457,10 +427,6 @@ class VoiceForegroundService : Service() {
 
                 if (recognizedText.isNotBlank()) {
                     handleRecognizedText(recognizedText)
-                } else {
-                    updatePopupStatus(
-                        "কথা শনাক্ত হয়নি। আবার শুনছি..."
-                    )
                 }
 
                 scheduleRestart(1000)
@@ -489,32 +455,10 @@ class VoiceForegroundService : Service() {
             }
 
             override fun onLanguageDetection(results: Bundle) {
-
-                if (Build.VERSION.SDK_INT >= 34) {
-
-                    val detected = results.getString(
-                        SpeechRecognizer.DETECTED_LANGUAGE
-                    )
-
-                    if (!detected.isNullOrBlank()) {
-                        sourceLanguage = normalizeLanguage(detected)
-                    }
-                }
+                // Manual language selection is enabled.
+                // Automatic language detection is intentionally disabled.
             }
         }
-
-    private fun normalizeLanguage(language: String): String {
-
-        val code = language.lowercase(Locale.ROOT)
-
-        return when {
-            code.startsWith("bn") -> "bn"
-            code.startsWith("en") -> "en"
-            code.startsWith("ar") -> "ar"
-            code.startsWith("hi") -> "hi"
-            else -> "und"
-        }
-    }
 
     private fun detectLanguageFromText(text: String): String {
 
@@ -532,34 +476,59 @@ class VoiceForegroundService : Service() {
                 it in '\u0600'..'\u06FF'
             } -> "ar"
 
-            sourceLanguage != "und" -> sourceLanguage
-
-            else -> "en"
+            else -> {
+                when (getSelectedLanguage()) {
+                    "bn-BD" -> "bn"
+                    "en-US" -> "en"
+                    "ar-SA" -> "ar"
+                    "hi-IN" -> "hi"
+                    else -> "bn"
+                }
+            }
         }
     }
 
     private fun handleRecognizedText(text: String) {
 
+        val cleanText = text.trim()
+
+        val unwantedMessages = listOf(
+            "কথা পরিষ্কার শোনা যাচ্ছে না",
+            "আবার চেষ্টা করুন",
+            "কথা শনাক্ত হয়নি",
+            "কোনো কথা শোনা যায়নি"
+        )
+
+        if (
+            unwantedMessages.any {
+                cleanText.contains(it, ignoreCase = true)
+            }
+        ) {
+            updateNotification("Listening again...")
+            updatePopupStatus("🎙 আবার শুনছি...")
+            return
+        }
+
         val detectedLanguage =
-            detectLanguageFromText(text)
+            detectLanguageFromText(cleanText)
 
         sourceLanguage = detectedLanguage
 
-        updateNotification("Heard: $text")
+        updateNotification("Heard: $cleanText")
 
         if (detectedLanguage == "bn") {
 
             updatePopup(
-                text,
+                cleanText,
                 "বাংলা কথা শনাক্ত হয়েছে"
             )
 
-            updateNotification("বাংলা: $text")
+            updateNotification("বাংলা: $cleanText")
 
         } else {
 
             translateToBangla(
-                text,
+                cleanText,
                 detectedLanguage
             )
         }
@@ -575,7 +544,6 @@ class VoiceForegroundService : Service() {
         executor.execute {
 
             var translatedText = ""
-
             var connection: HttpURLConnection? = null
 
             try {
@@ -722,11 +690,8 @@ class VoiceForegroundService : Service() {
     override fun onDestroy() {
 
         listeningEnabled = false
-
         handler.removeCallbacks(restartRunnable)
-
         destroyRecognizer()
-
         executor.shutdownNow()
 
         super.onDestroy()
