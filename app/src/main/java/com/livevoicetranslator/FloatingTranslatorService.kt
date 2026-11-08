@@ -12,10 +12,9 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
 import android.view.WindowManager.LayoutParams
-import android.view.inputmethod.InputMethodManager
-import android.content.Context
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -41,12 +40,17 @@ class FloatingTranslatorService : Service() {
     private lateinit var windowManager: WindowManager
     private lateinit var params: LayoutParams
 
+    private var overlayRoot: ScrollView? = null
     private var floatingView: LinearLayout? = null
+
     private var statusView: TextView? = null
     private var speechView: TextView? = null
     private var inputView: EditText? = null
     private var englishView: TextView? = null
     private var translateButton: Button? = null
+    private var minimizeButton: Button? = null
+
+    private var contentVisible = true
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val executor = Executors.newSingleThreadExecutor()
@@ -66,22 +70,22 @@ class FloatingTranslatorService : Service() {
         when (intent?.action) {
 
             ACTION_SHOW -> {
-                if (floatingView == null) {
+                if (overlayRoot == null) {
                     showFloatingWindow()
                 }
             }
 
             ACTION_UPDATE -> {
+                if (overlayRoot == null) {
+                    showFloatingWindow()
+                }
+
                 intent.getStringExtra(EXTRA_MESSAGE)?.let {
                     speechView?.text = it
                 }
 
                 intent.getStringExtra(EXTRA_STATUS)?.let {
                     statusView?.text = it
-                }
-
-                if (floatingView == null) {
-                    showFloatingWindow()
                 }
             }
 
@@ -131,7 +135,7 @@ class FloatingTranslatorService : Service() {
             setTextColor(Color.WHITE)
         }
 
-        val minimizeButton = Button(this).apply {
+        minimizeButton = Button(this).apply {
             text = "−"
             textSize = 18f
             setOnClickListener {
@@ -151,6 +155,7 @@ class FloatingTranslatorService : Service() {
             title,
             LinearLayout.LayoutParams(0, -2, 1f)
         )
+
         header.addView(minimizeButton)
         header.addView(closeButton)
 
@@ -161,10 +166,7 @@ class FloatingTranslatorService : Service() {
             setPadding(0, 10, 0, 12)
         }
 
-        val divider = TextView(this).apply {
-            setBackgroundColor(Color.rgb(50, 90, 130))
-            height = 1
-        }
+        val divider = dividerView()
 
         val speechTitle = makeTitle("৫ ভাষা থেকে বাংলা অনুবাদ")
 
@@ -176,10 +178,7 @@ class FloatingTranslatorService : Service() {
             minLines = 3
         }
 
-        val secondDivider = TextView(this).apply {
-            setBackgroundColor(Color.rgb(50, 90, 130))
-            height = 1
-        }
+        val secondDivider = dividerView()
 
         val inputTitle = makeTitle("বাংলা লিখুন → English")
 
@@ -192,6 +191,7 @@ class FloatingTranslatorService : Service() {
             minLines = 2
             maxLines = 4
             gravity = Gravity.TOP
+
             background = GradientDrawable().apply {
                 setColor(Color.WHITE)
                 cornerRadius = 12f
@@ -201,6 +201,7 @@ class FloatingTranslatorService : Service() {
         translateButton = Button(this).apply {
             text = "Translate to English"
             textSize = 15f
+
             setOnClickListener {
                 translateBanglaToEnglish()
             }
@@ -226,20 +227,14 @@ class FloatingTranslatorService : Service() {
 
         container.addView(
             inputView,
-            LinearLayout.LayoutParams(
-                -1,
-                -2
-            ).apply {
+            LinearLayout.LayoutParams(-1, -2).apply {
                 topMargin = 8
             }
         )
 
         container.addView(
             translateButton,
-            LinearLayout.LayoutParams(
-                -1,
-                -2
-            ).apply {
+            LinearLayout.LayoutParams(-1, -2).apply {
                 topMargin = 8
             }
         )
@@ -248,39 +243,53 @@ class FloatingTranslatorService : Service() {
         container.addView(englishView)
 
         scrollView.addView(container)
-        floatingView = container
 
         params = LayoutParams(
             (resources.displayMetrics.widthPixels * 0.92f).toInt(),
             (resources.displayMetrics.heightPixels * 0.78f).toInt(),
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 LayoutParams.TYPE_APPLICATION_OVERLAY
             } else {
                 LayoutParams.TYPE_PHONE
             },
+
             LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 LayoutParams.FLAG_NOT_TOUCH_MODAL,
+
             PixelFormat.TRANSLUCENT
+
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             y = 70
+
             softInputMode =
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
 
         try {
             windowManager.addView(scrollView, params)
-            floatingView = container
+
             overlayRoot = scrollView
+            floatingView = container
+
         } catch (e: Exception) {
-            floatingView = null
             overlayRoot = null
+            floatingView = null
             stopSelf()
         }
     }
 
-    private var overlayRoot: ScrollView? = null
-    private var contentVisible = true
+    private fun dividerView(): View {
+        return View(this).apply {
+            setBackgroundColor(Color.rgb(50, 90, 130))
+
+            layoutParams = LinearLayout.LayoutParams(
+                -1,
+                1
+            )
+        }
+    }
 
     private fun makeTitle(value: String): TextView {
         return TextView(this).apply {
@@ -294,7 +303,8 @@ class FloatingTranslatorService : Service() {
 
     private fun translateBanglaToEnglish() {
 
-        val original = inputView?.text?.toString()?.trim().orEmpty()
+        val original =
+            inputView?.text?.toString()?.trim().orEmpty()
 
         if (original.isBlank()) {
             englishView?.text = "আগে বাংলা লিখুন।"
@@ -307,7 +317,7 @@ class FloatingTranslatorService : Service() {
 
         executor.execute {
 
-            var result = ""
+            var result: String
 
             try {
                 val encoded = URLEncoder.encode(
@@ -335,20 +345,23 @@ class FloatingTranslatorService : Service() {
                 connection.disconnect()
 
                 val json = JSONObject(response)
+
                 result = json
                     .getJSONObject("responseData")
                     .getString("translatedText")
 
                 if (result.isBlank()) {
-                    result = "অনুবাদ পাওয়া যায়নি। আবার চেষ্টা করুন।"
+                    result = "অনুবাদ পাওয়া যায়নি।"
                 }
 
             } catch (e: Exception) {
-                result = "অনুবাদ করা যায়নি। ইন্টারনেট সংযোগ পরীক্ষা করুন।"
+                result =
+                    "অনুবাদ করা যায়নি। ইন্টারনেট সংযোগ পরীক্ষা করুন।"
             }
 
             mainHandler.post {
                 englishView?.text = result
+
                 translateButton?.isEnabled = true
                 translateButton?.text = "Translate to English"
             }
@@ -356,15 +369,22 @@ class FloatingTranslatorService : Service() {
     }
 
     private fun toggleContent() {
+
         contentVisible = !contentVisible
 
-        val root = overlayRoot ?: return
+        val root = floatingView ?: return
 
-        if (contentVisible) {
-            root.visibility = android.view.View.VISIBLE
-        } else {
-            root.visibility = android.view.View.GONE
+        for (i in 1 until root.childCount) {
+            root.getChildAt(i).visibility =
+                if (contentVisible) {
+                    View.VISIBLE
+                } else {
+                    View.GONE
+                }
         }
+
+        minimizeButton?.text =
+            if (contentVisible) "−" else "+"
     }
 
     private fun removeFloatingWindow() {
@@ -378,11 +398,13 @@ class FloatingTranslatorService : Service() {
 
         overlayRoot = null
         floatingView = null
+
         statusView = null
         speechView = null
         inputView = null
         englishView = null
         translateButton = null
+        minimizeButton = null
     }
 
     override fun onDestroy() {
@@ -391,5 +413,7 @@ class FloatingTranslatorService : Service() {
         super.onDestroy()
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onBind(intent: Intent?): IBinder? {
+        return null
+    }
 }
