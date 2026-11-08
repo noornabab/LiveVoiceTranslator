@@ -19,12 +19,10 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
-import java.util.Locale
 
 class VoiceForegroundService : Service() {
 
     companion object {
-
         const val ACTION_PREPARE = "PREPARE_VOICE_SERVICE"
         const val ACTION_START = "START_VOICE_LISTENING"
         const val ACTION_STOP_LISTENING = "STOP_VOICE_LISTENING"
@@ -45,8 +43,8 @@ class VoiceForegroundService : Service() {
     private var listening = false
 
     private var foregroundStarted = false
-
-    private var currentLanguage = "bn-BD"
+    private var currentLanguage = "en-US"
+    private var retryCount = 0
 
     private val restartRunnable = Runnable {
         if (listening) {
@@ -72,7 +70,6 @@ class VoiceForegroundService : Service() {
             }
 
             ACTION_START -> {
-
                 if (!foregroundStarted) {
                     startForegroundServiceNotification()
                 }
@@ -84,9 +81,7 @@ class VoiceForegroundService : Service() {
 
             ACTION_STOP_LISTENING -> {
                 stopListening()
-
                 updateNotification("Listening stopped")
-
                 updatePopup(
                     "মাইক্রোফোন বন্ধ করা হয়েছে।",
                     "LISTENING STOPPED"
@@ -160,15 +155,12 @@ class VoiceForegroundService : Service() {
                 createNotification("Voice translator ready")
 
             if (Build.VERSION.SDK_INT >= 29) {
-
                 startForeground(
                     NOTIFICATION_ID,
                     notification,
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                 )
-
             } else {
-
                 startForeground(
                     NOTIFICATION_ID,
                     notification
@@ -191,7 +183,6 @@ class VoiceForegroundService : Service() {
         if (!foregroundStarted) return
 
         try {
-
             val manager =
                 getSystemService(NOTIFICATION_SERVICE)
                     as NotificationManager
@@ -200,13 +191,12 @@ class VoiceForegroundService : Service() {
                 NOTIFICATION_ID,
                 createNotification(message)
             )
-
         } catch (_: Exception) {
         }
     }
 
     // =====================================
-    // LANGUAGE SELECTION
+    // LANGUAGE
     // =====================================
 
     private fun getSelectedLanguage(): String {
@@ -220,17 +210,15 @@ class VoiceForegroundService : Service() {
         val selected =
             preferences.getString(
                 PREF_LANGUAGE,
-                "bn-BD"
-            ) ?: "bn-BD"
+                "en-US"
+            ) ?: "en-US"
 
         return when (selected) {
-
             "bn-BD" -> "bn-BD"
             "en-US" -> "en-US"
             "ar-SA" -> "ar-SA"
             "hi-IN" -> "hi-IN"
-
-            else -> "bn-BD"
+            else -> "en-US"
         }
     }
 
@@ -239,11 +227,9 @@ class VoiceForegroundService : Service() {
     ): String {
 
         return when {
-
             language.startsWith("en") -> "en"
             language.startsWith("ar") -> "ar"
             language.startsWith("hi") -> "hi"
-
             else -> "bn"
         }
     }
@@ -254,21 +240,14 @@ class VoiceForegroundService : Service() {
 
     private fun startListening() {
 
-        if (listening) {
-            stopRecognizerOnly()
-        }
+        stopRecognizerOnly()
 
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-
-            updatePopup(
-                "এই ফোনে Speech Recognition পাওয়া যাচ্ছে না।",
-                "SPEECH RECOGNITION ERROR"
-            )
-
-            return
-        }
+        handler.removeCallbacks(restartRunnable)
 
         listening = true
+        retryCount = 0
+
+        currentLanguage = getSelectedLanguage()
 
         updateNotification("Listening active")
 
@@ -281,7 +260,211 @@ class VoiceForegroundService : Service() {
     }
 
     // =====================================
-    // SPEECH RECOGNITION
+    // CREATE RECOGNIZER
+    // =====================================
+
+    private fun createNewRecognizer(): Boolean {
+
+        return try {
+
+            stopRecognizerOnly()
+
+            if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+
+                updatePopup(
+                    "Speech Recognition পাওয়া যাচ্ছে না।",
+                    "RECOGNITION ERROR"
+                )
+
+                return false
+            }
+
+            speechRecognizer =
+                SpeechRecognizer.createSpeechRecognizer(this)
+
+            speechRecognizer?.setRecognitionListener(
+                object : RecognitionListener {
+
+                    override fun onReadyForSpeech(
+                        params: Bundle?
+                    ) {
+                        if (!listening) return
+
+                        updatePopup(
+                            "কথা বলুন...",
+                            "🎙 মাইক্রোফোন প্রস্তুত"
+                        )
+                    }
+
+                    override fun onBeginningOfSpeech() {
+                        if (!listening) return
+
+                        updatePopup(
+                            "আপনার কথা শোনা হচ্ছে...",
+                            "🎙 SPEAKING"
+                        )
+                    }
+
+                    override fun onRmsChanged(
+                        rmsdB: Float
+                    ) {
+                    }
+
+                    override fun onBufferReceived(
+                        buffer: ByteArray?
+                    ) {
+                    }
+
+                    override fun onEndOfSpeech() {
+                        if (!listening) return
+
+                        updatePopup(
+                            "কথা শনাক্ত করা হচ্ছে...",
+                            "PROCESSING"
+                        )
+                    }
+
+                    override fun onError(error: Int) {
+
+                        if (!listening) return
+
+                        val message = when (error) {
+
+                            SpeechRecognizer.ERROR_SERVER_DISCONNECTED ->
+                                "Recognition সার্ভার বিচ্ছিন্ন। নতুন করে সংযোগ করছি..."
+
+                            SpeechRecognizer.ERROR_NO_MATCH ->
+                                "কথা শনাক্ত হয়নি। আবার চেষ্টা করছি..."
+
+                            SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
+                                "কোনো কথা পাওয়া যায়নি। আবার চেষ্টা করছি..."
+
+                            SpeechRecognizer.ERROR_NETWORK ->
+                                "ইন্টারনেট সংযোগ পরীক্ষা করুন।"
+
+                            SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
+                                "ইন্টারনেটের উত্তর আসতে দেরি হচ্ছে।"
+
+                            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
+                                "মাইক্রোফোন permission নেই।"
+
+                            SpeechRecognizer.ERROR_RECOGNIZER_BUSY ->
+                                "Speech Recognition ব্যস্ত।"
+
+                            else ->
+                                "Speech Error: $error"
+                        }
+
+                        updatePopup(
+                            message,
+                            "RECONNECTING"
+                        )
+
+                        if (
+                            error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED ||
+                            error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
+                        ) {
+
+                            retryCount++
+
+                            scheduleRestart(
+                                minOf(
+                                    1500L * retryCount,
+                                    6000L
+                                ),
+                                true
+                            )
+
+                        } else {
+
+                            scheduleRestart(1200L, false)
+                        }
+                    }
+
+                    override fun onResults(
+                        results: Bundle?
+                    ) {
+
+                        if (!listening) return
+
+                        val matches =
+                            results?.getStringArrayList(
+                                SpeechRecognizer.RESULTS_RECOGNITION
+                            )
+
+                        val spokenText =
+                            matches?.firstOrNull()
+                                ?.trim()
+                                .orEmpty()
+
+                        if (spokenText.isNotBlank()) {
+
+                            retryCount = 0
+
+                            processRecognizedText(
+                                spokenText,
+                                currentLanguage
+                            )
+
+                        } else {
+
+                            updatePopup(
+                                "কথা শনাক্ত হয়নি। আবার বলুন...",
+                                "LISTENING"
+                            )
+                        }
+
+                        scheduleRestart(700L, false)
+                    }
+
+                    override fun onPartialResults(
+                        partialResults: Bundle?
+                    ) {
+
+                        if (!listening) return
+
+                        val matches =
+                            partialResults?.getStringArrayList(
+                                SpeechRecognizer.RESULTS_RECOGNITION
+                            )
+
+                        val partialText =
+                            matches?.firstOrNull()
+                                ?.trim()
+                                .orEmpty()
+
+                        if (partialText.isNotBlank()) {
+
+                            updatePopup(
+                                "শোনা হচ্ছে:\n$partialText",
+                                "🎙 LISTENING"
+                            )
+                        }
+                    }
+
+                    override fun onEvent(
+                        eventType: Int,
+                        params: Bundle?
+                    ) {
+                    }
+                }
+            )
+
+            speechRecognizer != null
+
+        } catch (e: Exception) {
+
+            updatePopup(
+                "Recognizer Error: ${e.message}",
+                "ERROR"
+            )
+
+            false
+        }
+    }
+
+    // =====================================
+    // START RECOGNITION
     // =====================================
 
     private fun startRecognition() {
@@ -290,160 +473,15 @@ class VoiceForegroundService : Service() {
 
         try {
 
-            currentLanguage = getSelectedLanguage()
-
             if (speechRecognizer == null) {
 
-                speechRecognizer =
-                    SpeechRecognizer.createSpeechRecognizer(this)
-
-                speechRecognizer?.setRecognitionListener(
-                    object : RecognitionListener {
-
-                        override fun onReadyForSpeech(
-                            params: Bundle?
-                        ) {
-
-                            updatePopup(
-                                "কথা বলুন...",
-                                "🎙 মাইক্রোফোন প্রস্তুত"
-                            )
-                        }
-
-                        override fun onBeginningOfSpeech() {
-
-                            updatePopup(
-                                "আপনার কথা শোনা হচ্ছে...",
-                                "🎙 SPEAKING"
-                            )
-                        }
-
-                        override fun onRmsChanged(
-                            rmsdB: Float
-                        ) {
-                            // Audio input level callback
-                        }
-
-                        override fun onBufferReceived(
-                            buffer: ByteArray?
-                        ) {
-                        }
-
-                        override fun onEndOfSpeech() {
-
-                            updatePopup(
-                                "কথা শনাক্ত করা হচ্ছে...",
-                                "PROCESSING"
-                            )
-                        }
-
-                        override fun onError(error: Int) {
-
-                            if (!listening) return
-
-                            val message = when (error) {
-
-                                SpeechRecognizer.ERROR_NO_MATCH ->
-                                    "কথা শনাক্ত হয়নি। আবার চেষ্টা করছি..."
-
-                                SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
-                                    "কোনো কথা পাওয়া যায়নি। আবার বলুন..."
-
-                                SpeechRecognizer.ERROR_NETWORK ->
-                                    "ইন্টারনেট সংযোগ পরীক্ষা করুন।"
-
-                                SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
-                                    "ইন্টারনেটের উত্তর আসতে দেরি হচ্ছে।"
-
-                                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
-                                    "মাইক্রোফোন permission নেই।"
-
-                                SpeechRecognizer.ERROR_RECOGNIZER_BUSY ->
-                                    "Speech Recognition ব্যস্ত।"
-
-                                else ->
-                                    "Speech Error: $error"
-                            }
-
-                            updatePopup(
-                                message,
-                                "LISTENING"
-                            )
-
-                            scheduleRestart(
-                                if (
-                                    error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
-                                ) 1500 else 900
-                            )
-                        }
-
-                        override fun onResults(
-                            results: Bundle?
-                        ) {
-
-                            if (!listening) return
-
-                            val matches =
-                                results?.getStringArrayList(
-                                    SpeechRecognizer.RESULTS_RECOGNITION
-                                )
-
-                            val spokenText =
-                                matches?.firstOrNull()
-                                    ?.trim()
-                                    .orEmpty()
-
-                            if (spokenText.isNotBlank()) {
-
-                                processRecognizedText(
-                                    spokenText,
-                                    currentLanguage
-                                )
-
-                            } else {
-
-                                updatePopup(
-                                    "কথা শনাক্ত হয়নি। আবার বলুন...",
-                                    "LISTENING"
-                                )
-                            }
-
-                            scheduleRestart(900)
-                        }
-
-                        override fun onPartialResults(
-                            partialResults: Bundle?
-                        ) {
-
-                            if (!listening) return
-
-                            val matches =
-                                partialResults?.getStringArrayList(
-                                    SpeechRecognizer.RESULTS_RECOGNITION
-                                )
-
-                            val partialText =
-                                matches?.firstOrNull()
-                                    ?.trim()
-                                    .orEmpty()
-
-                            if (partialText.isNotBlank()) {
-
-                                updatePopup(
-                                    "শোনা হচ্ছে:\n$partialText",
-                                    "🎙 LISTENING"
-                                )
-                            }
-                        }
-
-                        override fun onEvent(
-                            eventType: Int,
-                            params: Bundle?
-                        ) {
-                        }
-                    }
-                )
+                if (!createNewRecognizer()) {
+                    scheduleRestart(3000L, true)
+                    return
+                }
             }
+
+            currentLanguage = getSelectedLanguage()
 
             val intent = Intent(
                 RecognizerIntent.ACTION_RECOGNIZE_SPEECH
@@ -486,27 +524,38 @@ class VoiceForegroundService : Service() {
 
             updatePopup(
                 "Listening Error: ${e.message}",
-                "ERROR"
+                "RECONNECTING"
             )
 
-            scheduleRestart(1500)
-        }
-    }
-
-    private fun scheduleRestart(delay: Long) {
-
-        handler.removeCallbacks(restartRunnable)
-
-        if (listening) {
-            handler.postDelayed(
-                restartRunnable,
-                delay
-            )
+            scheduleRestart(2000L, true)
         }
     }
 
     // =====================================
-    // PROCESS RECOGNIZED TEXT
+    // RESTART RECOGNITION
+    // =====================================
+
+    private fun scheduleRestart(
+        delay: Long,
+        recreate: Boolean
+    ) {
+
+        handler.removeCallbacks(restartRunnable)
+
+        if (!listening) return
+
+        if (recreate) {
+            stopRecognizerOnly()
+        }
+
+        handler.postDelayed(
+            restartRunnable,
+            delay
+        )
+    }
+
+    // =====================================
+    // PROCESS SPEECH
     // =====================================
 
     private fun processRecognizedText(
@@ -533,7 +582,7 @@ class VoiceForegroundService : Service() {
         }
 
         updatePopup(
-            "শোনা হয়েছে:\n$spokenText\n\nবাংলায় অনুবাদ হচ্ছে...",
+            "মূল কথা:\n$spokenText\n\nবাংলায় অনুবাদ হচ্ছে...",
             "TRANSLATING"
         )
 
@@ -579,7 +628,7 @@ class VoiceForegroundService : Service() {
     }
 
     // =====================================
-    // TRANSLATION API
+    // TRANSLATION
     // =====================================
 
     private fun translateToBangla(
@@ -592,18 +641,12 @@ class VoiceForegroundService : Service() {
         return try {
 
             val encodedText =
-                URLEncoder.encode(
-                    text,
-                    "UTF-8"
-                )
-
-            val languagePair =
-                "$sourceLanguage|bn"
+                URLEncoder.encode(text, "UTF-8")
 
             val url = URL(
                 "https://api.mymemory.translated.net/get" +
                     "?q=$encodedText" +
-                    "&langpair=$languagePair"
+                    "&langpair=$sourceLanguage|bn"
             )
 
             connection =
@@ -613,10 +656,7 @@ class VoiceForegroundService : Service() {
             connection.readTimeout = 12000
             connection.requestMethod = "GET"
 
-            val responseCode =
-                connection.responseCode
-
-            if (responseCode != 200) {
+            if (connection.responseCode != 200) {
                 return ""
             }
 
@@ -625,10 +665,8 @@ class VoiceForegroundService : Service() {
                     .bufferedReader()
                     .use { it.readText() }
 
-            val json =
-                JSONObject(response)
-
-            json.getJSONObject("responseData")
+            JSONObject(response)
+                .getJSONObject("responseData")
                 .optString("translatedText", "")
                 .trim()
 
@@ -643,12 +681,10 @@ class VoiceForegroundService : Service() {
     }
 
     // =====================================
-    // STOP RECOGNITION
+    // STOP RECOGNIZER
     // =====================================
 
     private fun stopRecognizerOnly() {
-
-        handler.removeCallbacks(restartRunnable)
 
         try {
             speechRecognizer?.cancel()
@@ -675,7 +711,7 @@ class VoiceForegroundService : Service() {
     }
 
     // =====================================
-    // UPDATE FLOATING POPUP
+    // POPUP UPDATE
     // =====================================
 
     private fun updatePopup(
