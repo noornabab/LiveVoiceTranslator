@@ -2,7 +2,6 @@
 package com.livevoicetranslator
 
 import android.Manifest
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -28,7 +27,6 @@ class MainActivity : ComponentActivity() {
 
     private var incomingCallRinging = false
     private var callWasActive = false
-    private var permissionSetupStarted = false
 
     private val callPermissionLauncher =
         registerForActivityResult(
@@ -156,12 +154,82 @@ class MainActivity : ComponentActivity() {
             )
 
             statusText.text =
-                "প্রস্তুত। কলের অপেক্ষায় আছি..."
+                "প্রস্তুত। মাইক্রোফোন পরীক্ষার জন্য প্রস্তুত।"
 
         } catch (e: Exception) {
 
             statusText.text =
                 "Service Error: ${e.message}"
+        }
+    }
+
+    // =====================================
+    // START MANUAL MICROPHONE TEST
+    // =====================================
+
+    private fun startMicTest() {
+
+        if (
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+
+            microphonePermissionLauncher.launch(
+                Manifest.permission.RECORD_AUDIO
+            )
+
+            return
+        }
+
+        try {
+
+            val intent = Intent(
+                this,
+                VoiceForegroundService::class.java
+            ).apply {
+                action =
+                    VoiceForegroundService.ACTION_START
+            }
+
+            startService(intent)
+
+            statusText.text =
+                "🎙 মাইক্রোফোন পরীক্ষা চলছে। কথা বলুন।"
+
+        } catch (e: Exception) {
+
+            statusText.text =
+                "Microphone Test Error: ${e.message}"
+        }
+    }
+
+    // =====================================
+    // STOP MANUAL MICROPHONE TEST
+    // =====================================
+
+    private fun stopMicTest() {
+
+        try {
+
+            val intent = Intent(
+                this,
+                VoiceForegroundService::class.java
+            ).apply {
+                action =
+                    VoiceForegroundService.ACTION_STOP_LISTENING
+            }
+
+            startService(intent)
+
+            statusText.text =
+                "মাইক্রোফোন পরীক্ষা বন্ধ করা হয়েছে।"
+
+        } catch (e: Exception) {
+
+            statusText.text =
+                "Stop Error: ${e.message}"
         }
     }
 
@@ -185,7 +253,7 @@ class MainActivity : ComponentActivity() {
 
             telephonyManager =
                 getSystemService(
-                    Context.TELEPHONY_SERVICE
+                    TELEPHONY_SERVICE
                 ) as TelephonyManager
 
             callListener = object : PhoneStateListener() {
@@ -234,7 +302,7 @@ class MainActivity : ComponentActivity() {
 
                                 showCallPopup(
                                     callStatus,
-                                    "কথা শনাক্ত করার চেষ্টা চলছে..."
+                                    "মাইক্রোফোন পরীক্ষা চলছে..."
                                 )
 
                                 startCallListening()
@@ -287,8 +355,10 @@ class MainActivity : ComponentActivity() {
                 Manifest.permission.RECORD_AUDIO
             ) != PackageManager.PERMISSION_GRANTED
         ) {
+
             statusText.text =
                 "Microphone permission নেই"
+
             return
         }
 
@@ -394,12 +464,8 @@ class MainActivity : ComponentActivity() {
     }
 
     // =====================================
-    // MANUAL SERVICE CONTROLS
+    // STOP ENTIRE SERVICE
     // =====================================
-
-    private fun prepareAgain() {
-        checkMicrophonePermission()
-    }
 
     private fun stopEntireService() {
 
@@ -475,14 +541,21 @@ class MainActivity : ComponentActivity() {
             setPadding(10, 25, 10, 25)
         }
 
-        val prepareButton = Button(this).apply {
-            text = "PREPARE CALL TRANSLATOR"
+        val startMicButton = Button(this).apply {
+            text = "START MIC TEST"
             setOnClickListener {
-                prepareAgain()
+                startMicTest()
             }
         }
 
-        val stopButton = Button(this).apply {
+        val stopMicButton = Button(this).apply {
+            text = "STOP MIC TEST"
+            setOnClickListener {
+                stopMicTest()
+            }
+        }
+
+        val stopServiceButton = Button(this).apply {
             text = "STOP SERVICE"
             setOnClickListener {
                 stopEntireService()
@@ -490,8 +563,16 @@ class MainActivity : ComponentActivity() {
         }
 
         val info = TextView(this).apply {
+
             text = """
-                Automatic Mode
+                MICROPHONE TEST
+
+                1. START MIC TEST চাপুন।
+                2. ফোনের মাইক্রোফোনের সামনে কথা বলুন।
+                3. Popup-এ Audio Level দেখুন।
+                4. পরীক্ষা শেষে STOP MIC TEST চাপুন।
+
+                CALL MODE
 
                 • Incoming call detection
                 • Outgoing call detection
@@ -499,14 +580,10 @@ class MainActivity : ComponentActivity() {
                 • Listening stops after call ends
 
                 Supported languages:
+                Bengali
                 English
                 Arabic
                 Hindi
-                Urdu
-                Bengali
-
-                বাংলা কথা বাংলাতেই দেখানোর চেষ্টা করবে।
-                অন্য ভাষা বাংলায় অনুবাদ করবে।
 
                 কলের সময় Speaker চালু রাখুন।
             """.trimIndent()
@@ -521,8 +598,9 @@ class MainActivity : ComponentActivity() {
         content.addView(title)
         content.addView(subtitle)
         content.addView(statusText)
-        content.addView(prepareButton)
-        content.addView(stopButton)
+        content.addView(startMicButton)
+        content.addView(stopMicButton)
+        content.addView(stopServiceButton)
         content.addView(info)
 
         scroll.addView(content)
