@@ -33,11 +33,20 @@ class VoiceForegroundService : Service() {
         private const val CHANNEL_ID = "live_voice_channel"
         private const val NOTIFICATION_ID = 1001
 
+        private const val PREFS_NAME = "LiveVoiceSettings"
+        private const val PREF_LANGUAGE = "speech_language"
+
         private const val EXTRA_ENABLE_LANGUAGE_DETECTION =
             "android.speech.extra.ENABLE_LANGUAGE_DETECTION"
 
         private const val EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES =
             "android.speech.extra.LANGUAGE_DETECTION_ALLOWED_LANGUAGES"
+
+        private const val EXTRA_ENABLE_LANGUAGE_SWITCH =
+            "android.speech.extra.ENABLE_LANGUAGE_SWITCH"
+
+        private const val EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES =
+            "android.speech.extra.LANGUAGE_SWITCH_ALLOWED_LANGUAGES"
     }
 
     private var speechRecognizer: SpeechRecognizer? = null
@@ -129,7 +138,7 @@ class VoiceForegroundService : Service() {
                 "Live Voice Translator",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Bangla and English voice translation"
+                description = "Multilingual voice translation"
             }
 
             val manager =
@@ -212,6 +221,17 @@ class VoiceForegroundService : Service() {
         }
     }
 
+    private fun getSelectedLanguage(): String {
+
+        return getSharedPreferences(
+            PREFS_NAME,
+            MODE_PRIVATE
+        ).getString(
+            PREF_LANGUAGE,
+            "auto"
+        ) ?: "auto"
+    }
+
     private fun startRecognition() {
 
         if (!listeningEnabled) return
@@ -241,6 +261,8 @@ class VoiceForegroundService : Service() {
                 )
             }
 
+            val selectedLanguage = getSelectedLanguage()
+
             val recognitionIntent = Intent(
                 RecognizerIntent.ACTION_RECOGNIZE_SPEECH
             ).apply {
@@ -249,8 +271,6 @@ class VoiceForegroundService : Service() {
                     RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                     RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
                 )
-
-                // No fixed language. Do not force English.
 
                 putExtra(
                     RecognizerIntent.EXTRA_PARTIAL_RESULTS,
@@ -267,9 +287,25 @@ class VoiceForegroundService : Service() {
                     packageName
                 )
 
-                // Automatic Bengali and English detection on Android 14+.
+                if (selectedLanguage != "auto") {
 
-                if (Build.VERSION.SDK_INT >= 34) {
+                    // নির্দিষ্ট ভাষা নির্বাচন করা হলে
+
+                    putExtra(
+                        RecognizerIntent.EXTRA_LANGUAGE,
+                        selectedLanguage
+                    )
+
+                } else if (Build.VERSION.SDK_INT >= 34) {
+
+                    // Auto Detect: চারটি ভাষা
+
+                    val languages = arrayListOf(
+                        "bn-BD",
+                        "en-US",
+                        "ar-SA",
+                        "hi-IN"
+                    )
 
                     putExtra(
                         EXTRA_ENABLE_LANGUAGE_DETECTION,
@@ -278,10 +314,17 @@ class VoiceForegroundService : Service() {
 
                     putStringArrayListExtra(
                         EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES,
-                        arrayListOf(
-                            "bn-BD",
-                            "en-US"
-                        )
+                        languages
+                    )
+
+                    putExtra(
+                        EXTRA_ENABLE_LANGUAGE_SWITCH,
+                        RecognizerIntent.LANGUAGE_SWITCH_BALANCED
+                    )
+
+                    putStringArrayListExtra(
+                        EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES,
+                        languages
                     )
                 }
             }
@@ -290,13 +333,16 @@ class VoiceForegroundService : Service() {
 
             speechRecognizer?.startListening(recognitionIntent)
 
-            updateNotification(
-                "Listening for Bengali and English..."
-            )
+            val listeningMessage = when (selectedLanguage) {
+                "bn-BD" -> "বাংলা শুনছি..."
+                "en-US" -> "Listening in English..."
+                "ar-SA" -> "الاستماع باللغة العربية..."
+                "hi-IN" -> "हिन्दी सुन रहा हूँ..."
+                else -> "বাংলা, English, Arabic ও Hindi শুনছি..."
+            }
 
-            updatePopupStatus(
-                "🎙 বাংলা ও ইংরেজি শুনছি..."
-            )
+            updateNotification(listeningMessage)
+            updatePopupStatus("🎙 $listeningMessage")
 
         } catch (e: Exception) {
 
@@ -412,7 +458,9 @@ class VoiceForegroundService : Service() {
                 if (recognizedText.isNotBlank()) {
                     handleRecognizedText(recognizedText)
                 } else {
-                    updatePopupStatus("কথা শনাক্ত হয়নি। আবার শুনছি...")
+                    updatePopupStatus(
+                        "কথা শনাক্ত হয়নি। আবার শুনছি..."
+                    )
                 }
 
                 scheduleRestart(1000)
@@ -462,6 +510,8 @@ class VoiceForegroundService : Service() {
         return when {
             code.startsWith("bn") -> "bn"
             code.startsWith("en") -> "en"
+            code.startsWith("ar") -> "ar"
+            code.startsWith("hi") -> "hi"
             else -> "und"
         }
     }
@@ -474,9 +524,15 @@ class VoiceForegroundService : Service() {
                 it in '\u0980'..'\u09FF'
             } -> "bn"
 
-            sourceLanguage == "bn" -> "bn"
+            text.any {
+                it in '\u0900'..'\u097F'
+            } -> "hi"
 
-            sourceLanguage == "en" -> "en"
+            text.any {
+                it in '\u0600'..'\u06FF'
+            } -> "ar"
+
+            sourceLanguage != "und" -> sourceLanguage
 
             else -> "en"
         }
@@ -504,7 +560,7 @@ class VoiceForegroundService : Service() {
 
             translateToBangla(
                 text,
-                "en"
+                detectedLanguage
             )
         }
     }
