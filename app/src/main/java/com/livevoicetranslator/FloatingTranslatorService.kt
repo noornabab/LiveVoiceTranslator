@@ -11,6 +11,8 @@ import android.os.Build
 import android.os.IBinder
 import android.os.Handler
 import android.os.Looper
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -58,8 +60,10 @@ class FloatingTranslatorService : Service() {
 
     private var statusView: TextView? = null
     private var speechView: TextView? = null
+    private var speechHistoryView: TextView? = null
     private var englishResultView: TextView? = null
     private var contentLayout: LinearLayout? = null
+    private var banglaInput: EditText? = null
 
     private var dragX = 0
     private var dragY = 0
@@ -67,9 +71,14 @@ class FloatingTranslatorService : Service() {
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    private var translationRunnable: Runnable? = null
+    private var translationRequestId = 0
+    private var lastHistoryEntry = ""
+
     override fun onCreate() {
         super.onCreate()
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        windowManager =
+            getSystemService(WINDOW_SERVICE) as WindowManager
     }
 
     override fun onStartCommand(
@@ -84,17 +93,27 @@ class FloatingTranslatorService : Service() {
 
             ACTION_UPDATE -> {
 
-                val message = intent.getStringExtra(EXTRA_MESSAGE)
-                val status = intent.getStringExtra(EXTRA_STATUS)
+                val message =
+                    intent.getStringExtra(EXTRA_MESSAGE)
 
-                if (!popupVisible) showPopup()
+                val status =
+                    intent.getStringExtra(EXTRA_STATUS)
 
-                if (message != null) {
-                    speechView?.text = message
+                if (!popupVisible) {
+                    showPopup()
                 }
 
                 if (status != null) {
                     statusView?.text = status
+                }
+
+                if (message != null) {
+
+                    speechView?.text = message
+
+                    if (isFinalSpeech(status)) {
+                        appendSpeechHistory(message)
+                    }
                 }
             }
 
@@ -104,18 +123,76 @@ class FloatingTranslatorService : Service() {
         return START_NOT_STICKY
     }
 
+    // =====================================
+    // BASIC HELPERS
+    // =====================================
+
     private fun dp(value: Int): Int {
-        return (value * resources.displayMetrics.density).toInt()
+        return (
+            value * resources.displayMetrics.density
+        ).toInt()
     }
+
+    private fun roundedBackground(
+        color: Int,
+        radius: Int
+    ): GradientDrawable {
+
+        return GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = radius.toFloat()
+        }
+    }
+
+    private fun isFinalSpeech(status: String?): Boolean {
+
+        return status == "বাংলা অনুবাদ সম্পন্ন" ||
+            status == "বাংলা কথা শনাক্ত হয়েছে" ||
+            status == "TRANSLATION FAILED"
+    }
+
+    // =====================================
+    // SPEECH HISTORY
+    // =====================================
+
+    private fun appendSpeechHistory(message: String) {
+
+        val cleanMessage = message.trim()
+
+        if (cleanMessage.isBlank()) return
+
+        if (cleanMessage == lastHistoryEntry) return
+
+        lastHistoryEntry = cleanMessage
+
+        mainHandler.post {
+
+            val history = speechHistoryView ?: return@post
+
+            val existing = history.text.toString()
+
+            history.text =
+                if (existing.isBlank()) {
+                    cleanMessage
+                } else {
+                    "$existing\n\n────────────────\n\n$cleanMessage"
+                }
+        }
+    }
+
+    // =====================================
+    // SHOW POPUP
+    // =====================================
 
     private fun showPopup() {
 
         if (popupVisible) return
 
         minimized = false
+        lastHistoryEntry = ""
 
         expandedHeight =
-            (resources.displayMetrics.heightPixels * 0.55).toInt()
+            (resources.displayMetrics.heightPixels * 0.65).toInt()
 
         minimizedHeight = dp(68)
 
@@ -127,10 +204,17 @@ class FloatingTranslatorService : Service() {
         val mainLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(14), dp(18), dp(18))
-            background = roundedBackground(Color.rgb(25, 30, 42), dp(18))
+            background = roundedBackground(
+                Color.rgb(25, 30, 42),
+                dp(18)
+            )
         }
 
         rootView.addView(mainLayout)
+
+        // =====================================
+        // HEADER
+        // =====================================
 
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -139,6 +223,7 @@ class FloatingTranslatorService : Service() {
         }
 
         val title = TextView(this).apply {
+
             text = "LIVE VOICE TRANSLATOR ↕"
             textSize = 17f
             setTextColor(Color.WHITE)
@@ -156,18 +241,29 @@ class FloatingTranslatorService : Service() {
             when (event.action) {
 
                 MotionEvent.ACTION_DOWN -> {
-                    dragX = event.rawX.toInt() - params.x
-                    dragY = event.rawY.toInt() - params.y
+
+                    dragX =
+                        event.rawX.toInt() - params.x
+
+                    dragY =
+                        event.rawY.toInt() - params.y
+
                     true
                 }
 
                 MotionEvent.ACTION_MOVE -> {
 
-                    params.x = event.rawX.toInt() - dragX
-                    params.y = event.rawY.toInt() - dragY
+                    params.x =
+                        event.rawX.toInt() - dragX
+
+                    params.y =
+                        event.rawY.toInt() - dragY
 
                     try {
-                        windowManager.updateViewLayout(rootView, params)
+                        windowManager.updateViewLayout(
+                            rootView,
+                            params
+                        )
                     } catch (_: Exception) {
                     }
 
@@ -218,7 +314,12 @@ class FloatingTranslatorService : Service() {
 
         mainLayout.addView(contentLayout)
 
+        // =====================================
+        // STATUS
+        // =====================================
+
         statusView = TextView(this).apply {
+
             text = "অনুবাদ প্রস্তুত"
             textSize = 13f
             setTextColor(Color.rgb(100, 220, 150))
@@ -227,7 +328,12 @@ class FloatingTranslatorService : Service() {
 
         contentLayout?.addView(statusView)
 
+        // =====================================
+        // LANGUAGE SELECTOR
+        // =====================================
+
         val languageLabel = TextView(this).apply {
+
             text = "Speech Language"
             textSize = 14f
             setTextColor(Color.WHITE)
@@ -296,7 +402,10 @@ class FloatingTranslatorService : Service() {
                     }
 
                     preferences.edit()
-                        .putString(PREF_LANGUAGE, selectedLanguage)
+                        .putString(
+                            PREF_LANGUAGE,
+                            selectedLanguage
+                        )
                         .apply()
 
                     statusView?.text = when (position) {
@@ -322,8 +431,13 @@ class FloatingTranslatorService : Service() {
             )
         )
 
+        // =====================================
+        // CURRENT SPEECH
+        // =====================================
+
         val speechLabel = TextView(this).apply {
-            text = "Recognized Speech / বাংলা অনুবাদ"
+
+            text = "Live Speech"
             textSize = 14f
             setTextColor(Color.WHITE)
             setPadding(dp(4), dp(14), dp(4), dp(6))
@@ -332,11 +446,21 @@ class FloatingTranslatorService : Service() {
         contentLayout?.addView(speechLabel)
 
         speechView = TextView(this).apply {
-            text = "কথা বললে এখানে অনুবাদ দেখা যাবে"
-            textSize = 19f
+
+            text = "কথা বললে এখানে দেখা যাবে"
+            textSize = 17f
             setTextColor(Color.WHITE)
-            setPadding(dp(12), dp(14), dp(12), dp(14))
-            background = roundedBackground(Color.rgb(45, 52, 68), dp(12))
+            setPadding(
+                dp(12),
+                dp(14),
+                dp(12),
+                dp(14)
+            )
+
+            background = roundedBackground(
+                Color.rgb(45, 52, 68),
+                dp(12)
+            )
         }
 
         contentLayout?.addView(
@@ -347,77 +471,348 @@ class FloatingTranslatorService : Service() {
             )
         )
 
+        // =====================================
+        // SPEECH HISTORY
+        // =====================================
+
+        val historyLabel = TextView(this).apply {
+
+            text = "কথোপকথন / TRANSLATION HISTORY"
+            textSize = 14f
+            setTextColor(Color.rgb(120, 220, 170))
+            setPadding(dp(4), dp(16), dp(4), dp(6))
+        }
+
+        contentLayout?.addView(historyLabel)
+
+        speechHistoryView = TextView(this).apply {
+
+            text = "এখনো কোনো কথা শনাক্ত হয়নি।"
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            setPadding(
+                dp(12),
+                dp(12),
+                dp(12),
+                dp(12)
+            )
+
+            background = roundedBackground(
+                Color.rgb(38, 45, 60),
+                dp(12)
+            )
+
+            setLineSpacing(dp(3).toFloat(), 1f)
+        }
+
+        contentLayout?.addView(
+            speechHistoryView,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+
+        // =====================================
+        // BANGLA INPUT
+        // =====================================
+
         val inputLabel = TextView(this).apply {
+
             text = "বাংলায় লিখুন → English Translation"
             textSize = 14f
             setTextColor(Color.WHITE)
-            setPadding(dp(4), dp(16), dp(4), dp(6))
+            setPadding(dp(4), dp(18), dp(4), dp(6))
         }
 
         contentLayout?.addView(inputLabel)
 
-        val banglaInput = EditText(this).apply {
+        banglaInput = EditText(this).apply {
+
             hint = "এখানে বাংলায় লিখুন"
             textSize = 16f
             setTextColor(Color.BLACK)
             setHintTextColor(Color.GRAY)
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+
+            setPadding(
+                dp(12),
+                dp(10),
+                dp(12),
+                dp(10)
+            )
+
             setBackgroundColor(Color.WHITE)
+
+            minLines = 2
+            maxLines = 4
+            gravity = Gravity.TOP
         }
 
-        contentLayout?.addView(banglaInput)
+        contentLayout?.addView(
+            banglaInput,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
 
-        val translateButton = Button(this).apply {
-
-            text = "Translate to English"
-
-            setOnClickListener {
-
-                val input = banglaInput.text.toString().trim()
-
-                if (input.isNotEmpty()) {
-                    statusView?.text = "অনুবাদ করা হচ্ছে..."
-                    translateBanglaToEnglish(input)
-                }
-            }
-        }
-
-        contentLayout?.addView(translateButton)
+        // =====================================
+        // AUTOMATIC ENGLISH TRANSLATION
+        // =====================================
 
         englishResultView = TextView(this).apply {
+
             text = "English translation will appear here"
             textSize = 17f
             setTextColor(Color.WHITE)
-            setPadding(dp(10), dp(12), dp(10), dp(12))
+
+            setPadding(
+                dp(12),
+                dp(12),
+                dp(12),
+                dp(12)
+            )
+
+            background = roundedBackground(
+                Color.rgb(45, 52, 68),
+                dp(12)
+            )
         }
 
-        contentLayout?.addView(englishResultView)
+        contentLayout?.addView(
+            englishResultView,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(8)
+            }
+        )
+
+        setupAutomaticTranslation()
+
+        // =====================================
+        // WINDOW PARAMETERS
+        // =====================================
 
         params = LayoutParams(
             (resources.displayMetrics.widthPixels * 0.88).toInt(),
             expandedHeight,
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 LayoutParams.TYPE_APPLICATION_OVERLAY
             } else {
                 LayoutParams.TYPE_PHONE
             },
+
             LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 LayoutParams.FLAG_NOT_TOUCH_MODAL,
+
             PixelFormat.TRANSLUCENT
+
         ).apply {
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+
+            gravity =
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL
+
             y = dp(70)
         }
 
         try {
 
-            windowManager.addView(rootView, params)
+            windowManager.addView(
+                rootView,
+                params
+            )
+
             popupVisible = true
 
         } catch (_: Exception) {
+
             stopSelf()
         }
     }
+
+    // =====================================
+    // AUTOMATIC BANGLA TO ENGLISH
+    // =====================================
+
+    private fun setupAutomaticTranslation() {
+
+        banglaInput?.addTextChangedListener(
+
+            object : TextWatcher {
+
+                override fun beforeTextChanged(
+                    s: CharSequence?,
+                    start: Int,
+                    count: Int,
+                    after: Int
+                ) {
+                }
+
+                override fun onTextChanged(
+                    s: CharSequence?,
+                    start: Int,
+                    before: Int,
+                    count: Int
+                ) {
+
+                    val input =
+                        s?.toString()?.trim().orEmpty()
+
+                    translationRequestId++
+
+                    val requestId = translationRequestId
+
+                    translationRunnable?.let {
+                        mainHandler.removeCallbacks(it)
+                    }
+
+                    if (input.isBlank()) {
+
+                        englishResultView?.text =
+                            "English translation will appear here"
+
+                        statusView?.text =
+                            "বাংলা লিখুন"
+
+                        return
+                    }
+
+                    englishResultView?.text =
+                        "অনুবাদ হচ্ছে..."
+
+                    statusView?.text =
+                        "English translation হচ্ছে..."
+
+                    val runnable = Runnable {
+
+                        translateBanglaToEnglish(
+                            input,
+                            requestId
+                        )
+                    }
+
+                    translationRunnable = runnable
+
+                    mainHandler.postDelayed(
+                        runnable,
+                        700
+                    )
+                }
+
+                override fun afterTextChanged(
+                    s: Editable?
+                ) {
+                }
+            }
+        )
+    }
+
+    private fun translateBanglaToEnglish(
+        input: String,
+        requestId: Int
+    ) {
+
+        executor.execute {
+
+            var connection: HttpURLConnection? = null
+
+            try {
+
+                val encoded =
+                    URLEncoder.encode(
+                        input,
+                        "UTF-8"
+                    )
+
+                val url = URL(
+                    "https://api.mymemory.translated.net/get" +
+                        "?q=$encoded&langpair=bn|en"
+                )
+
+                connection =
+                    url.openConnection() as HttpURLConnection
+
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 10000
+                connection.readTimeout = 10000
+
+                val responseCode =
+                    connection.responseCode
+
+                if (responseCode != 200) {
+                    throw Exception("HTTP $responseCode")
+                }
+
+                val response =
+                    connection.inputStream
+                        .bufferedReader()
+                        .use { it.readText() }
+
+                val translated =
+                    JSONObject(response)
+                        .getJSONObject("responseData")
+                        .optString(
+                            "translatedText",
+                            ""
+                        )
+                        .trim()
+
+                mainHandler.post {
+
+                    if (
+                        requestId != translationRequestId
+                    ) {
+                        return@post
+                    }
+
+                    if (translated.isNotBlank()) {
+
+                        englishResultView?.text =
+                            translated
+
+                        statusView?.text =
+                            "English translation complete"
+
+                    } else {
+
+                        englishResultView?.text =
+                            "অনুবাদ পাওয়া যায়নি।"
+
+                        statusView?.text =
+                            "Translation unavailable"
+                    }
+                }
+
+            } catch (e: Exception) {
+
+                mainHandler.post {
+
+                    if (
+                        requestId != translationRequestId
+                    ) {
+                        return@post
+                    }
+
+                    englishResultView?.text =
+                        "অনুবাদ করা যায়নি। ইন্টারনেট পরীক্ষা করুন।"
+
+                    statusView?.text =
+                        "Translation failed"
+                }
+
+            } finally {
+
+                connection?.disconnect()
+            }
+        }
+    }
+
+    // =====================================
+    // MINIMIZE / EXPAND
+    // =====================================
 
     private fun toggleContent() {
 
@@ -428,6 +823,7 @@ class FloatingTranslatorService : Service() {
         if (minimized) {
 
             contentLayout?.visibility = View.GONE
+
             rootView.isFillViewport = false
 
             params.height = minimizedHeight
@@ -437,6 +833,7 @@ class FloatingTranslatorService : Service() {
         } else {
 
             contentLayout?.visibility = View.VISIBLE
+
             rootView.isFillViewport = true
 
             params.height = expandedHeight
@@ -445,72 +842,19 @@ class FloatingTranslatorService : Service() {
         }
 
         try {
-            windowManager.updateViewLayout(rootView, params)
+
+            windowManager.updateViewLayout(
+                rootView,
+                params
+            )
+
         } catch (_: Exception) {
         }
     }
 
-    private fun roundedBackground(
-        color: Int,
-        radius: Int
-    ): GradientDrawable {
-
-        return GradientDrawable().apply {
-            setColor(color)
-            cornerRadius = radius.toFloat()
-        }
-    }
-
-    private fun translateBanglaToEnglish(input: String) {
-
-        executor.execute {
-
-            var connection: HttpURLConnection? = null
-
-            try {
-
-                val encoded = URLEncoder.encode(input, "UTF-8")
-
-                val url = URL(
-                    "https://api.mymemory.translated.net/get?q=$encoded&langpair=bn|en"
-                )
-
-                connection =
-                    url.openConnection() as HttpURLConnection
-
-                connection.requestMethod = "GET"
-                connection.connectTimeout = 10000
-                connection.readTimeout = 10000
-
-                val response = connection.inputStream
-                    .bufferedReader()
-                    .use { it.readText() }
-
-                val translated = JSONObject(response)
-                    .getJSONObject("responseData")
-                    .getString("translatedText")
-
-                mainHandler.post {
-
-                    englishResultView?.text = translated
-                    statusView?.text = "English translation complete"
-                }
-
-            } catch (_: Exception) {
-
-                mainHandler.post {
-
-                    englishResultView?.text =
-                        "অনুবাদ করা যায়নি। ইন্টারনেট পরীক্ষা করুন।"
-
-                    statusView?.text = "Translation failed"
-                }
-
-            } finally {
-                connection?.disconnect()
-            }
-        }
-    }
+    // =====================================
+    // HIDE POPUP
+    // =====================================
 
     private fun hidePopup() {
 
@@ -527,7 +871,17 @@ class FloatingTranslatorService : Service() {
         stopSelf()
     }
 
+    // =====================================
+    // DESTROY
+    // =====================================
+
     override fun onDestroy() {
+
+        translationRunnable?.let {
+            mainHandler.removeCallbacks(it)
+        }
+
+        translationRequestId++
 
         if (popupVisible) {
 
@@ -544,5 +898,7 @@ class FloatingTranslatorService : Service() {
         super.onDestroy()
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onBind(
+        intent: Intent?
+    ): IBinder? = null
 }
