@@ -91,19 +91,25 @@ class FloatingTranslatorService : Service() {
 
         when (intent?.action) {
 
-            ACTION_SHOW -> showPopup()
+            // শুধু MainActivity থেকে কল শুরু হলে Popup খুলবে।
+            ACTION_SHOW -> {
+                showPopup()
+            }
 
+            // Popup আগে থেকে খোলা থাকলেই আপডেট হবে।
+            // Popup বন্ধ থাকলে কখনোই নতুন করে খুলবে না।
             ACTION_UPDATE -> {
+
+                if (!popupVisible) {
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
 
                 val message =
                     intent.getStringExtra(EXTRA_MESSAGE)
 
                 val status =
                     intent.getStringExtra(EXTRA_STATUS)
-
-                if (!popupVisible) {
-                    showPopup()
-                }
 
                 if (status != null) {
                     statusView?.text = status
@@ -119,7 +125,10 @@ class FloatingTranslatorService : Service() {
                 }
             }
 
-            ACTION_HIDE -> hidePopup()
+            // কল শেষ হলে Popup বন্ধ হবে।
+            ACTION_HIDE -> {
+                hidePopup()
+            }
         }
 
         return START_NOT_STICKY
@@ -185,7 +194,6 @@ class FloatingTranslatorService : Service() {
                     "$existing\n\n────────────────\n\n$cleanMessage"
                 }
 
-            // নতুন কথা যোগ হলে নিচে স্ক্রল করবে
             history.post {
 
                 historyScrollView?.post {
@@ -750,6 +758,7 @@ class FloatingTranslatorService : Service() {
 
         } catch (_: Exception) {
 
+            popupVisible = false
             stopSelf()
         }
     }
@@ -989,6 +998,12 @@ class FloatingTranslatorService : Service() {
 
             popupVisible = false
         }
+
+        translationRunnable?.let {
+            mainHandler.removeCallbacks(it)
+        }
+
+        translationRequestId++
 
         stopSelf()
     }
