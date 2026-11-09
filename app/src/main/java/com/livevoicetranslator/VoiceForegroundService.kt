@@ -1,8 +1,8 @@
-
 package com.livevoicetranslator
 
 import android.app.Notification
 import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -108,7 +108,7 @@ class VoiceForegroundService : Service() {
     }
 
     // =====================================
-    // NOTIFICATION
+    // NOTIFICATION CHANNEL
     // =====================================
 
     private fun createNotificationChannel() {
@@ -122,12 +122,17 @@ class VoiceForegroundService : Service() {
             )
 
             val manager =
-                getSystemService(NOTIFICATION_SERVICE)
-                    as NotificationManager
+                getSystemService(
+                    NotificationManager::class.java
+                )
 
             manager.createNotificationChannel(channel)
         }
     }
+
+    // =====================================
+    // CREATE NOTIFICATION
+    // =====================================
 
     private fun createNotification(
         message: String
@@ -149,6 +154,10 @@ class VoiceForegroundService : Service() {
             .build()
     }
 
+    // =====================================
+    // START FOREGROUND
+    // =====================================
+
     private fun startForegroundServiceNotification() {
 
         if (foregroundStarted) return
@@ -158,7 +167,7 @@ class VoiceForegroundService : Service() {
             val notification =
                 createNotification("Voice translator ready")
 
-            if (Build.VERSION.SDK_INT >= 29) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
 
                 startForeground(
                     NOTIFICATION_ID,
@@ -185,6 +194,10 @@ class VoiceForegroundService : Service() {
         }
     }
 
+    // =====================================
+    // UPDATE NOTIFICATION
+    // =====================================
+
     private fun updateNotification(message: String) {
 
         if (!foregroundStarted) return
@@ -192,8 +205,9 @@ class VoiceForegroundService : Service() {
         try {
 
             val manager =
-                getSystemService(NOTIFICATION_SERVICE)
-                    as NotificationManager
+                getSystemService(
+                    NotificationManager::class.java
+                )
 
             manager.notify(
                 NOTIFICATION_ID,
@@ -330,7 +344,6 @@ class VoiceForegroundService : Service() {
                         val now =
                             SystemClock.elapsedRealtime()
 
-                        // প্রতি 500ms-এ একবার Popup আপডেট
                         if (
                             now - lastAudioLevelUpdate < 500
                         ) {
@@ -340,7 +353,11 @@ class VoiceForegroundService : Service() {
                         lastAudioLevelUpdate = now
 
                         val safeDb =
-                            if (rmsdB.isNaN()) 0f else rmsdB
+                            if (rmsdB.isNaN() || rmsdB.isInfinite()) {
+                                0f
+                            } else {
+                                rmsdB
+                            }
 
                         val level =
                             ((safeDb + 2f) * 8f)
