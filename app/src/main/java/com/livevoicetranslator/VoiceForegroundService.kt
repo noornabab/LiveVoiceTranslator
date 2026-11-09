@@ -3,7 +3,6 @@ package com.livevoicetranslator
 
 import android.app.Notification
 import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -12,6 +11,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -45,6 +45,8 @@ class VoiceForegroundService : Service() {
     private var foregroundStarted = false
     private var currentLanguage = "en-US"
     private var retryCount = 0
+
+    private var lastAudioLevelUpdate = 0L
 
     private val restartRunnable = Runnable {
         if (listening) {
@@ -81,7 +83,9 @@ class VoiceForegroundService : Service() {
 
             ACTION_STOP_LISTENING -> {
                 stopListening()
+
                 updateNotification("Listening stopped")
+
                 updatePopup(
                     "মাইক্রোফোন বন্ধ করা হয়েছে।",
                     "LISTENING STOPPED"
@@ -155,12 +159,15 @@ class VoiceForegroundService : Service() {
                 createNotification("Voice translator ready")
 
             if (Build.VERSION.SDK_INT >= 29) {
+
                 startForeground(
                     NOTIFICATION_ID,
                     notification,
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                 )
+
             } else {
+
                 startForeground(
                     NOTIFICATION_ID,
                     notification
@@ -183,6 +190,7 @@ class VoiceForegroundService : Service() {
         if (!foregroundStarted) return
 
         try {
+
             val manager =
                 getSystemService(NOTIFICATION_SERVICE)
                     as NotificationManager
@@ -191,6 +199,7 @@ class VoiceForegroundService : Service() {
                 NOTIFICATION_ID,
                 createNotification(message)
             )
+
         } catch (_: Exception) {
         }
     }
@@ -246,13 +255,14 @@ class VoiceForegroundService : Service() {
 
         listening = true
         retryCount = 0
+        lastAudioLevelUpdate = 0L
 
         currentLanguage = getSelectedLanguage()
 
         updateNotification("Listening active")
 
         updatePopup(
-            "কথা শুনছি...",
+            "মাইক্রোফোন প্রস্তুত হচ্ছে...",
             "🎙 LISTENING"
         )
 
@@ -288,15 +298,17 @@ class VoiceForegroundService : Service() {
                     override fun onReadyForSpeech(
                         params: Bundle?
                     ) {
+
                         if (!listening) return
 
                         updatePopup(
-                            "কথা বলুন...",
-                            "🎙 মাইক্রোফোন প্রস্তুত"
+                            "কথা বলুন। কলের অডিও পরীক্ষা চলছে...",
+                            "🎙 AUDIO LEVEL: অপেক্ষা..."
                         )
                     }
 
                     override fun onBeginningOfSpeech() {
+
                         if (!listening) return
 
                         updatePopup(
@@ -305,9 +317,40 @@ class VoiceForegroundService : Service() {
                         )
                     }
 
+                    // =====================================
+                    // LIVE AUDIO LEVEL
+                    // =====================================
+
                     override fun onRmsChanged(
                         rmsdB: Float
                     ) {
+
+                        if (!listening) return
+
+                        val now =
+                            SystemClock.elapsedRealtime()
+
+                        // প্রতি 500ms-এ একবার Popup আপডেট
+                        if (
+                            now - lastAudioLevelUpdate < 500
+                        ) {
+                            return
+                        }
+
+                        lastAudioLevelUpdate = now
+
+                        val safeDb =
+                            if (rmsdB.isNaN()) 0f else rmsdB
+
+                        val level =
+                            ((safeDb + 2f) * 8f)
+                                .toInt()
+                                .coerceIn(0, 100)
+
+                        updatePopup(
+                            "কলের অডিও পরীক্ষা চলছে...",
+                            "🎙 AUDIO LEVEL: $level%"
+                        )
                     }
 
                     override fun onBufferReceived(
@@ -316,6 +359,7 @@ class VoiceForegroundService : Service() {
                     }
 
                     override fun onEndOfSpeech() {
+
                         if (!listening) return
 
                         updatePopup(
@@ -324,6 +368,10 @@ class VoiceForegroundService : Service() {
                         )
                     }
 
+                    // =====================================
+                    // ERROR HANDLING
+                    // =====================================
+
                     override fun onError(error: Int) {
 
                         if (!listening) return
@@ -331,7 +379,7 @@ class VoiceForegroundService : Service() {
                         val message = when (error) {
 
                             SpeechRecognizer.ERROR_SERVER_DISCONNECTED ->
-                                "Recognition সার্ভার বিচ্ছিন্ন। নতুন করে সংযোগ করছি..."
+                                "Recognition সার্ভার বিচ্ছিন্ন। পুনরায় সংযোগ করছি..."
 
                             SpeechRecognizer.ERROR_NO_MATCH ->
                                 "কথা শনাক্ত হয়নি। আবার চেষ্টা করছি..."
@@ -377,9 +425,13 @@ class VoiceForegroundService : Service() {
 
                         } else {
 
-                            scheduleRestart(1200L, false)
+                            scheduleRestart(1500L, false)
                         }
                     }
+
+                    // =====================================
+                    // FINAL RESULTS
+                    // =====================================
 
                     override fun onResults(
                         results: Bundle?
@@ -414,8 +466,12 @@ class VoiceForegroundService : Service() {
                             )
                         }
 
-                        scheduleRestart(700L, false)
+                        scheduleRestart(900L, false)
                     }
+
+                    // =====================================
+                    // PARTIAL RESULTS
+                    // =====================================
 
                     override fun onPartialResults(
                         partialResults: Bundle?
