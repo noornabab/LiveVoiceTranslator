@@ -4,398 +4,564 @@ package com.livevoicetranslator
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyManager
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
 
+    private lateinit var telephonyManager: TelephonyManager
+
     private lateinit var statusText: TextView
 
-    private var telephonyManager: TelephonyManager? = null
-    private var callListener: PhoneStateListener? = null
+    private var listenerRegistered = false
 
     private var incomingCallRinging = false
-    private var callWasActive = false
+    private var callActive = false
+    private var callPopupShown = false
+    private var listeningStarted = false
 
-    private val callPermissionLauncher =
+    // =====================================
+    // PERMISSION REQUEST
+    // =====================================
+
+    private val permissionLauncher =
         registerForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { granted ->
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { permissions ->
 
-            if (granted) {
-                registerCallListener()
-                checkMicrophonePermission()
-            } else {
+            val phonePermission =
+                permissions[Manifest.permission.READ_PHONE_STATE] == true ||
+                    checkSelfPermission(
+                        Manifest.permission.READ_PHONE_STATE
+                    ) == PackageManager.PERMISSION_GRANTED
+
+            if (phonePermission) {
+                registerPhoneListener()
+            }
+
+            if (
+                checkSelfPermission(
+                    Manifest.permission.RECORD_AUDIO
+                ) == PackageManager.PERMISSION_GRANTED
+            ) {
+                prepareVoiceService()
+            }
+
+            if (!phonePermission) {
                 statusText.text =
-                    "Phone State permission প্রয়োজন"
+                    "Phone permission প্রয়োজন"
             }
         }
 
-    private val microphonePermissionLauncher =
-        registerForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { granted ->
-
-            if (granted) {
-                requestNotificationPermission()
-            } else {
-                statusText.text =
-                    "Microphone permission প্রয়োজন"
-            }
-        }
-
-    private val notificationPermissionLauncher =
-        registerForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) {
-            prepareVoiceService()
-        }
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        createInterface()
-        checkPermissionsAndPrepare()
-    }
-
     // =====================================
-    // PERMISSIONS
+    // PHONE STATE LISTENER
     // =====================================
 
-    private fun checkPermissionsAndPrepare() {
+    private val phoneStateListener =
+        object : PhoneStateListener() {
 
-        if (
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.READ_PHONE_STATE
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
+            override fun onCallStateChanged(
+                state: Int,
+                phoneNumber: String?
+            ) {
 
-            registerCallListener()
-            checkMicrophonePermission()
+                super.onCallStateChanged(
+                    state,
+                    phoneNumber
+                )
 
-        } else {
+                when (state) {
 
-            callPermissionLauncher.launch(
-                Manifest.permission.READ_PHONE_STATE
-            )
-        }
-    }
+                    // =================================
+                    // INCOMING CALL
+                    // =================================
 
-    private fun checkMicrophonePermission() {
+                    TelephonyManager.CALL_STATE_RINGING -> {
 
-        if (
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.RECORD_AUDIO
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
+                        incomingCallRinging = true
 
-            requestNotificationPermission()
+                        if (!callPopupShown) {
 
-        } else {
+                            callPopupShown = true
 
-            microphonePermissionLauncher.launch(
-                Manifest.permission.RECORD_AUDIO
-            )
-        }
-    }
+                            showCallPopup()
 
-    private fun requestNotificationPermission() {
+                            statusText.text =
+                                "Incoming call detected"
+                        }
+                    }
 
-        if (
-            Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
+                    // =================================
+                    // INCOMING ANSWERED / OUTGOING CALL
+                    // =================================
 
-            notificationPermissionLauncher.launch(
-                Manifest.permission.POST_NOTIFICATIONS
-            )
+                    TelephonyManager.CALL_STATE_OFFHOOK -> {
 
-        } else {
+                        if (!callActive) {
 
-            prepareVoiceService()
-        }
-    }
+                            callActive = true
 
-    // =====================================
-    // PREPARE FOREGROUND SERVICE
-    // =====================================
+                            // Incoming অথবা Outgoing,
+                            // দুই ক্ষেত্রেই Popup নিশ্চিত করা।
+                            if (!callPopupShown) {
 
-    private fun prepareVoiceService() {
+                                callPopupShown = true
 
-        try {
-
-            val intent = Intent(
-                this,
-                VoiceForegroundService::class.java
-            ).apply {
-                action =
-                    VoiceForegroundService.ACTION_PREPARE
-            }
-
-            ContextCompat.startForegroundService(
-                this,
-                intent
-            )
-
-            statusText.text =
-                "প্রস্তুত। মাইক্রোফোন পরীক্ষার জন্য প্রস্তুত।"
-
-        } catch (e: Exception) {
-
-            statusText.text =
-                "Service Error: ${e.message}"
-        }
-    }
-
-    // =====================================
-    // START MANUAL MICROPHONE TEST
-    // =====================================
-
-    private fun startMicTest() {
-
-        if (
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.RECORD_AUDIO
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-
-            microphonePermissionLauncher.launch(
-                Manifest.permission.RECORD_AUDIO
-            )
-
-            return
-        }
-
-        try {
-
-            val intent = Intent(
-                this,
-                VoiceForegroundService::class.java
-            ).apply {
-                action =
-                    VoiceForegroundService.ACTION_START
-            }
-
-            startService(intent)
-
-            statusText.text =
-                "🎙 মাইক্রোফোন পরীক্ষা চলছে। কথা বলুন।"
-
-        } catch (e: Exception) {
-
-            statusText.text =
-                "Microphone Test Error: ${e.message}"
-        }
-    }
-
-    // =====================================
-    // STOP MANUAL MICROPHONE TEST
-    // =====================================
-
-    private fun stopMicTest() {
-
-        try {
-
-            val intent = Intent(
-                this,
-                VoiceForegroundService::class.java
-            ).apply {
-                action =
-                    VoiceForegroundService.ACTION_STOP_LISTENING
-            }
-
-            startService(intent)
-
-            statusText.text =
-                "মাইক্রোফোন পরীক্ষা বন্ধ করা হয়েছে।"
-
-        } catch (e: Exception) {
-
-            statusText.text =
-                "Stop Error: ${e.message}"
-        }
-    }
-
-    // =====================================
-    // CALL DETECTION
-    // =====================================
-
-    @Suppress("DEPRECATION")
-    private fun registerCallListener() {
-
-        if (
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.READ_PHONE_STATE
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-
-        try {
-
-            telephonyManager =
-                getSystemService(
-                    TELEPHONY_SERVICE
-                ) as TelephonyManager
-
-            callListener = object : PhoneStateListener() {
-
-                override fun onCallStateChanged(
-                    state: Int,
-                    phoneNumber: String?
-                ) {
-
-                    super.onCallStateChanged(
-                        state,
-                        phoneNumber
-                    )
-
-                    runOnUiThread {
-
-                        when (state) {
-
-                            TelephonyManager.CALL_STATE_RINGING -> {
-
-                                incomingCallRinging = true
-                                callWasActive = true
-
-                                statusText.text =
-                                    "📞 INCOMING CALL"
-
-                                showCallPopup(
-                                    "INCOMING CALL",
-                                    "ফোনে কল এসেছে। কল ধরুন এবং Speaker চালু করুন।"
-                                )
+                                showCallPopup()
                             }
 
-                            TelephonyManager.CALL_STATE_OFFHOOK -> {
-
-                                callWasActive = true
-
-                                val callStatus =
-                                    if (incomingCallRinging) {
-                                        "INCOMING CALL CONNECTED"
-                                    } else {
-                                        "OUTGOING / ACTIVE CALL"
-                                    }
-
-                                statusText.text =
-                                    "🎙 কল চলাকালীন Listening চালু হচ্ছে..."
-
-                                showCallPopup(
-                                    callStatus,
-                                    "মাইক্রোফোন পরীক্ষা চলছে..."
-                                )
-
-                                startCallListening()
-                            }
-
-                            TelephonyManager.CALL_STATE_IDLE -> {
-
-                                if (callWasActive) {
-
-                                    stopCallListening()
-
-                                    statusText.text =
-                                        "কল শেষ। Listening বন্ধ।"
-
-                                    showCallPopup(
-                                        "CALL ENDED",
-                                        "কল শেষ হয়েছে। মাইক্রোফোন বন্ধ করা হয়েছে।"
-                                    )
+                            statusText.text =
+                                if (incomingCallRinging) {
+                                    "Incoming call connected"
+                                } else {
+                                    "Outgoing call connected"
                                 }
 
-                                incomingCallRinging = false
-                                callWasActive = false
-                            }
+                            startCallListening()
+                        }
+                    }
+
+                    // =================================
+                    // CALL ENDED
+                    // =================================
+
+                    TelephonyManager.CALL_STATE_IDLE -> {
+
+                        if (
+                            callActive ||
+                            incomingCallRinging ||
+                            callPopupShown
+                        ) {
+
+                            stopCallListening()
+
+                            hideCallPopup()
+
+                            incomingCallRinging = false
+                            callActive = false
+                            callPopupShown = false
+                            listeningStarted = false
+
+                            statusText.text =
+                                "Call ended. Waiting for next call."
                         }
                     }
                 }
             }
+        }
 
-            telephonyManager?.listen(
-                callListener,
-                PhoneStateListener.LISTEN_CALL_STATE
+    // =====================================
+    // ON CREATE
+    // =====================================
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+
+        super.onCreate(savedInstanceState)
+
+        telephonyManager =
+            getSystemService(TELEPHONY_SERVICE) as TelephonyManager
+
+        createMainScreen()
+
+        requestAppPermissions()
+    }
+
+    // =====================================
+    // MAIN SCREEN
+    // =====================================
+
+    private fun createMainScreen() {
+
+        val mainLayout = LinearLayout(this).apply {
+
+            orientation = LinearLayout.VERTICAL
+
+            gravity = Gravity.CENTER
+
+            setPadding(
+                35,
+                35,
+                35,
+                35
             )
 
-        } catch (e: Exception) {
+            setBackgroundColor(
+                android.graphics.Color.rgb(25, 30, 42)
+            )
+        }
 
-            statusText.text =
-                "Call Detection Error: ${e.message}"
+        val title = TextView(this).apply {
+
+            text = "LIVE VOICE TRANSLATOR"
+
+            textSize = 22f
+
+            setTextColor(
+                android.graphics.Color.WHITE
+            )
+
+            gravity = Gravity.CENTER
+
+            setPadding(0, 0, 0, 25)
+        }
+
+        mainLayout.addView(title)
+
+        statusText = TextView(this).apply {
+
+            text = "App প্রস্তুত হচ্ছে..."
+
+            textSize = 15f
+
+            setTextColor(
+                android.graphics.Color.rgb(100, 220, 150)
+            )
+
+            gravity = Gravity.CENTER
+
+            setPadding(0, 10, 0, 25)
+        }
+
+        mainLayout.addView(statusText)
+
+        // =================================
+        // START MIC TEST
+        // =================================
+
+        val startButton = Button(this).apply {
+
+            text = "START MIC TEST"
+
+            setOnClickListener {
+
+                if (!hasMicrophonePermission()) {
+
+                    requestAppPermissions()
+
+                    return@setOnClickListener
+                }
+
+                startVoiceService(
+                    VoiceForegroundService.ACTION_START
+                )
+
+                statusText.text =
+                    "Microphone test started"
+            }
+        }
+
+        mainLayout.addView(
+            startButton,
+            buttonLayoutParams()
+        )
+
+        // =================================
+        // STOP MIC TEST
+        // =================================
+
+        val stopButton = Button(this).apply {
+
+            text = "STOP MIC TEST"
+
+            setOnClickListener {
+
+                stopCallListening()
+
+                statusText.text =
+                    "Microphone test stopped"
+            }
+        }
+
+        mainLayout.addView(
+            stopButton,
+            buttonLayoutParams()
+        )
+
+        // =================================
+        // STOP SERVICE
+        // =================================
+
+        val stopServiceButton = Button(this).apply {
+
+            text = "STOP SERVICE"
+
+            setOnClickListener {
+
+                stopCallListening()
+
+                val intent = Intent(
+                    this@MainActivity,
+                    VoiceForegroundService::class.java
+                ).apply {
+                    action = VoiceForegroundService.ACTION_STOP
+                }
+
+                try {
+                    startService(intent)
+                } catch (_: Exception) {
+                }
+
+                hideCallPopup()
+
+                incomingCallRinging = false
+                callActive = false
+                callPopupShown = false
+                listeningStarted = false
+
+                statusText.text =
+                    "Service stopped"
+            }
+        }
+
+        mainLayout.addView(
+            stopServiceButton,
+            buttonLayoutParams()
+        )
+
+        // =================================
+        // OVERLAY PERMISSION
+        // =================================
+
+        val overlayButton = Button(this).apply {
+
+            text = "ENABLE POPUP PERMISSION"
+
+            setOnClickListener {
+
+                openOverlaySettings()
+            }
+        }
+
+        mainLayout.addView(
+            overlayButton,
+            buttonLayoutParams()
+        )
+
+        setContentView(mainLayout)
+    }
+
+    private fun buttonLayoutParams(): LinearLayout.LayoutParams {
+
+        return LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            bottomMargin = 10
         }
     }
 
     // =====================================
-    // START LISTENING DURING CALL
+    // REQUEST PERMISSIONS
     // =====================================
 
-    private fun startCallListening() {
+    private fun requestAppPermissions() {
+
+        val requiredPermissions = mutableListOf(
+            Manifest.permission.READ_PHONE_STATE,
+            Manifest.permission.RECORD_AUDIO
+        )
+
+        if (Build.VERSION.SDK_INT >= 33) {
+
+            requiredPermissions.add(
+                Manifest.permission.POST_NOTIFICATIONS
+            )
+        }
+
+        val missingPermissions =
+            requiredPermissions.filter {
+
+                checkSelfPermission(it) !=
+                    PackageManager.PERMISSION_GRANTED
+            }
+
+        if (missingPermissions.isNotEmpty()) {
+
+            permissionLauncher.launch(
+                missingPermissions.toTypedArray()
+            )
+
+        } else {
+
+            registerPhoneListener()
+            prepareVoiceService()
+        }
 
         if (
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.RECORD_AUDIO
-            ) != PackageManager.PERMISSION_GRANTED
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+            !Settings.canDrawOverlays(this)
         ) {
 
             statusText.text =
-                "Microphone permission নেই"
+                "Popup permission চালু করুন"
+        }
+    }
 
+    private fun hasMicrophonePermission(): Boolean {
+
+        return checkSelfPermission(
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    // =====================================
+    // OVERLAY SETTINGS
+    // =====================================
+
+    private fun openOverlaySettings() {
+
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+            !Settings.canDrawOverlays(this)
+        ) {
+
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+
+            startActivity(intent)
+
+        } else {
+
+            Toast.makeText(
+                this,
+                "Popup permission already enabled",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    // =====================================
+    // PREPARE VOICE SERVICE
+    // =====================================
+
+    private fun prepareVoiceService() {
+
+        if (!hasMicrophonePermission()) return
+
+        val intent = Intent(
+            this,
+            VoiceForegroundService::class.java
+        ).apply {
+
+            action =
+                VoiceForegroundService.ACTION_PREPARE
+        }
+
+        try {
+
+            startService(intent)
+
+        } catch (e: Exception) {
+
+            statusText.text =
+                "Voice service প্রস্তুত করা যায়নি"
+        }
+    }
+
+    // =====================================
+    // REGISTER PHONE LISTENER
+    // =====================================
+
+    private fun registerPhoneListener() {
+
+        if (listenerRegistered) return
+
+        if (
+            checkSelfPermission(
+                Manifest.permission.READ_PHONE_STATE
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
             return
         }
 
         try {
 
-            val intent = Intent(
-                this,
-                VoiceForegroundService::class.java
-            ).apply {
-                action =
-                    VoiceForegroundService.ACTION_START
-            }
+            telephonyManager.listen(
+                phoneStateListener,
+                PhoneStateListener.LISTEN_CALL_STATE
+            )
 
-            startService(intent)
+            listenerRegistered = true
+
+            statusText.text =
+                "Incoming & Outgoing call monitoring active"
+
+            // App চলমান কলের মধ্যে খোলা হলে
+            // বর্তমান OFFHOOK অবস্থাও পরীক্ষা করবে।
+            if (
+                telephonyManager.callState ==
+                TelephonyManager.CALL_STATE_OFFHOOK
+            ) {
+
+                callActive = true
+                callPopupShown = true
+
+                showCallPopup()
+                startCallListening()
+            }
 
         } catch (e: Exception) {
 
             statusText.text =
-                "Listening চালু করা যায়নি: ${e.message}"
+                "Phone monitoring failed"
         }
     }
 
     // =====================================
-    // STOP LISTENING AFTER CALL
+    // START CALL LISTENING
+    // =====================================
+
+    private fun startCallListening() {
+
+        if (listeningStarted) return
+
+        if (!hasMicrophonePermission()) {
+
+            statusText.text =
+                "Microphone permission প্রয়োজন"
+
+            return
+        }
+
+        listeningStarted = true
+
+        startVoiceService(
+            VoiceForegroundService.ACTION_START
+        )
+    }
+
+    // =====================================
+    // STOP CALL LISTENING
     // =====================================
 
     private fun stopCallListening() {
 
-        try {
+        listeningStarted = false
 
-            val intent = Intent(
-                this,
-                VoiceForegroundService::class.java
-            ).apply {
-                action =
-                    VoiceForegroundService.ACTION_STOP_LISTENING
-            }
+        val intent = Intent(
+            this,
+            VoiceForegroundService::class.java
+        ).apply {
+
+            action =
+                VoiceForegroundService.ACTION_STOP_LISTENING
+        }
+
+        try {
 
             startService(intent)
 
@@ -404,236 +570,134 @@ class MainActivity : ComponentActivity() {
     }
 
     // =====================================
-    // FLOATING POPUP
+    // START VOICE SERVICE
     // =====================================
 
-    private fun showCallPopup(
-        callStatus: String,
-        message: String
-    ) {
+    private fun startVoiceService(actionName: String) {
+
+        val intent = Intent(
+            this,
+            VoiceForegroundService::class.java
+        ).apply {
+
+            action = actionName
+        }
 
         try {
 
-            if (
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-                !android.provider.Settings.canDrawOverlays(this)
-            ) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
 
-                statusText.text =
-                    "Floating Popup permission প্রয়োজন"
+                startForegroundService(intent)
 
-                return
+            } else {
+
+                startService(intent)
             }
-
-            val showIntent = Intent(
-                this,
-                FloatingTranslatorService::class.java
-            ).apply {
-                action =
-                    FloatingTranslatorService.ACTION_SHOW
-            }
-
-            startService(showIntent)
-
-            val updateIntent = Intent(
-                this,
-                FloatingTranslatorService::class.java
-            ).apply {
-
-                action =
-                    FloatingTranslatorService.ACTION_UPDATE
-
-                putExtra(
-                    FloatingTranslatorService.EXTRA_STATUS,
-                    callStatus
-                )
-
-                putExtra(
-                    FloatingTranslatorService.EXTRA_MESSAGE,
-                    message
-                )
-            }
-
-            startService(updateIntent)
 
         } catch (e: Exception) {
 
             statusText.text =
-                "Popup Error: ${e.message}"
+                "Voice service start failed: ${e.message}"
         }
     }
 
     // =====================================
-    // STOP ENTIRE SERVICE
+    // SHOW CALL POPUP
     // =====================================
 
-    private fun stopEntireService() {
+    private fun showCallPopup() {
+
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+            !Settings.canDrawOverlays(this)
+        ) {
+
+            statusText.text =
+                "Popup permission চালু করুন"
+
+            return
+        }
+
+        val intent = Intent(
+            this,
+            FloatingTranslatorService::class.java
+        ).apply {
+
+            action =
+                FloatingTranslatorService.ACTION_SHOW
+        }
 
         try {
-
-            val intent = Intent(
-                this,
-                VoiceForegroundService::class.java
-            ).apply {
-                action =
-                    VoiceForegroundService.ACTION_STOP
-            }
 
             startService(intent)
 
-            statusText.text =
-                "Voice service সম্পূর্ণ বন্ধ"
-
         } catch (e: Exception) {
 
             statusText.text =
-                "Stop Error: ${e.message}"
+                "Popup খুলতে সমস্যা হয়েছে"
         }
     }
 
     // =====================================
-    // USER INTERFACE
+    // HIDE CALL POPUP
     // =====================================
 
-    private fun createInterface() {
+    private fun hideCallPopup() {
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 30, 24, 24)
-            setBackgroundColor(
-                android.graphics.Color.WHITE
-            )
+        val intent = Intent(
+            this,
+            FloatingTranslatorService::class.java
+        ).apply {
+
+            action =
+                FloatingTranslatorService.ACTION_HIDE
         }
 
-        val scroll = ScrollView(this)
+        try {
 
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+            startService(intent)
+
+        } catch (_: Exception) {
         }
-
-        val title = TextView(this).apply {
-            text = "LIVE VOICE TRANSLATOR"
-            textSize = 23f
-            gravity = Gravity.CENTER
-            setTextColor(
-                android.graphics.Color.rgb(20, 75, 130)
-            )
-            setPadding(5, 15, 5, 10)
-        }
-
-        val subtitle = TextView(this).apply {
-            text = "Automatic Call Voice Translation"
-            textSize = 16f
-            gravity = Gravity.CENTER
-            setTextColor(
-                android.graphics.Color.DKGRAY
-            )
-            setPadding(5, 5, 5, 25)
-        }
-
-        statusText = TextView(this).apply {
-            text = "প্রস্তুত হচ্ছে..."
-            textSize = 16f
-            gravity = Gravity.CENTER
-            setTextColor(
-                android.graphics.Color.rgb(20, 100, 60)
-            )
-            setPadding(10, 25, 10, 25)
-        }
-
-        val startMicButton = Button(this).apply {
-            text = "START MIC TEST"
-            setOnClickListener {
-                startMicTest()
-            }
-        }
-
-        val stopMicButton = Button(this).apply {
-            text = "STOP MIC TEST"
-            setOnClickListener {
-                stopMicTest()
-            }
-        }
-
-        val stopServiceButton = Button(this).apply {
-            text = "STOP SERVICE"
-            setOnClickListener {
-                stopEntireService()
-            }
-        }
-
-        val info = TextView(this).apply {
-
-            text = """
-                MICROPHONE TEST
-
-                1. START MIC TEST চাপুন।
-                2. ফোনের মাইক্রোফোনের সামনে কথা বলুন।
-                3. Popup-এ Audio Level দেখুন।
-                4. পরীক্ষা শেষে STOP MIC TEST চাপুন।
-
-                CALL MODE
-
-                • Incoming call detection
-                • Outgoing call detection
-                • Listening during active calls
-                • Listening stops after call ends
-
-                Supported languages:
-                Bengali
-                English
-                Arabic
-                Hindi
-
-                কলের সময় Speaker চালু রাখুন।
-            """.trimIndent()
-
-            textSize = 15f
-            setTextColor(
-                android.graphics.Color.DKGRAY
-            )
-            setPadding(12, 20, 12, 20)
-        }
-
-        content.addView(title)
-        content.addView(subtitle)
-        content.addView(statusText)
-        content.addView(startMicButton)
-        content.addView(stopMicButton)
-        content.addView(stopServiceButton)
-        content.addView(info)
-
-        scroll.addView(content)
-
-        root.addView(
-            scroll,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        )
-
-        setContentView(root)
     }
 
     // =====================================
-    // CLEANUP
+    // ON RESUME
     // =====================================
 
-    @Suppress("DEPRECATION")
+    override fun onResume() {
+
+        super.onResume()
+
+        if (
+            checkSelfPermission(
+                Manifest.permission.READ_PHONE_STATE
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+
+            registerPhoneListener()
+        }
+    }
+
+    // =====================================
+    // ON DESTROY
+    // =====================================
+
     override fun onDestroy() {
 
-        try {
+        if (listenerRegistered) {
 
-            callListener?.let {
-                telephonyManager?.listen(
-                    it,
+            try {
+
+                telephonyManager.listen(
+                    phoneStateListener,
                     PhoneStateListener.LISTEN_NONE
                 )
+
+            } catch (_: Exception) {
             }
 
-        } catch (_: Exception) {
+            listenerRegistered = false
         }
 
         super.onDestroy()
