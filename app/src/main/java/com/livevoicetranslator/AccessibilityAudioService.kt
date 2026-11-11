@@ -11,8 +11,6 @@ import android.graphics.PixelFormat
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import android.os.Build
-import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.telephony.PhoneStateListener
@@ -41,7 +39,8 @@ class AccessibilityAudioService : AccessibilityService() {
         private const val CHANNELS = 1
         private const val BITS_PER_SAMPLE = 16
 
-        private const val CHUNK_SECONDS = 6
+        // Accuracy priority: longer audio context
+        private const val CHUNK_SECONDS = 10
     }
 
     private var telephonyManager: TelephonyManager? = null
@@ -69,8 +68,6 @@ class AccessibilityAudioService : AccessibilityService() {
     @Volatile
     private var lastRecognizedText = ""
 
-    // SERVICE CONNECTED
-
     override fun onServiceConnected() {
         super.onServiceConnected()
 
@@ -82,11 +79,15 @@ class AccessibilityAudioService : AccessibilityService() {
         startPhoneMonitoring()
     }
 
+    // =====================================
     // PHONE MONITORING
+    // =====================================
 
     @Suppress("DEPRECATION")
     private fun startPhoneMonitoring() {
+
         try {
+
             if (
                 checkSelfPermission(Manifest.permission.READ_PHONE_STATE) !=
                 PackageManager.PERMISSION_GRANTED
@@ -109,6 +110,7 @@ class AccessibilityAudioService : AccessibilityService() {
                     when (state) {
 
                         TelephonyManager.CALL_STATE_OFFHOOK -> {
+
                             if (callActive) return
 
                             callActive = true
@@ -120,6 +122,7 @@ class AccessibilityAudioService : AccessibilityService() {
                         }
 
                         TelephonyManager.CALL_STATE_IDLE -> {
+
                             if (!callActive) return
 
                             callActive = false
@@ -156,10 +159,14 @@ class AccessibilityAudioService : AccessibilityService() {
         }
     }
 
+    // =====================================
     // POPUP CONTROL
+    // =====================================
 
     private fun showTranslatorPopup() {
+
         try {
+
             val intent = Intent(
                 this,
                 FloatingTranslatorService::class.java
@@ -175,7 +182,9 @@ class AccessibilityAudioService : AccessibilityService() {
     }
 
     private fun hideTranslatorPopup() {
+
         try {
+
             val intent = Intent(
                 this,
                 FloatingTranslatorService::class.java
@@ -189,9 +198,12 @@ class AccessibilityAudioService : AccessibilityService() {
         }
     }
 
+    // =====================================
     // SELECTED LANGUAGE
+    // =====================================
 
     private fun getSelectedLanguage(): String {
+
         val preferences = getSharedPreferences(
             PREFS_NAME,
             MODE_PRIVATE
@@ -204,18 +216,24 @@ class AccessibilityAudioService : AccessibilityService() {
     }
 
     private fun getApiLanguage(): String {
+
         return when (getSelectedLanguage()) {
+
             "en-US", "en-IN", "en" -> "en"
             "ar-SA", "ar" -> "ar"
             "hi-IN", "hi" -> "hi"
             "bn-BD", "bn" -> "bn"
+
             else -> "bn"
         }
     }
 
+    // =====================================
     // START AUDIO CAPTURE
+    // =====================================
 
     private fun startAudioCapture() {
+
         if (!callActive) return
 
         if (
@@ -237,6 +255,7 @@ class AccessibilityAudioService : AccessibilityService() {
             var recorder: AudioRecord? = null
 
             try {
+
                 val minBuffer = AudioRecord.getMinBufferSize(
                     SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO,
@@ -277,7 +296,8 @@ class AccessibilityAudioService : AccessibilityService() {
                 }
 
                 val chunkSize =
-                    SAMPLE_RATE * CHANNELS *
+                    SAMPLE_RATE *
+                    CHANNELS *
                     (BITS_PER_SAMPLE / 8) *
                     CHUNK_SECONDS
 
@@ -297,12 +317,15 @@ class AccessibilityAudioService : AccessibilityService() {
                     )
 
                     if (count > 0) {
+
                         audioChunk.write(
                             readBuffer,
                             0,
                             count
                         )
+
                     } else if (count < 0) {
+
                         throw Exception("Audio read error: $count")
                     }
 
@@ -316,6 +339,7 @@ class AccessibilityAudioService : AccessibilityService() {
                             recordingRunning.get() &&
                             callActive
                         ) {
+
                             val wav = createWav(pcm)
 
                             sendAudioToWorker(wav)
@@ -326,6 +350,7 @@ class AccessibilityAudioService : AccessibilityService() {
             } catch (e: Exception) {
 
                 if (callActive) {
+
                     mainHandler.post {
                         updateStatus(
                             "AUDIO ERROR: ${e.message}"
@@ -354,7 +379,9 @@ class AccessibilityAudioService : AccessibilityService() {
         }
     }
 
+    // =====================================
     // CREATE WAV FILE
+    // =====================================
 
     private fun createWav(pcm: ByteArray): ByteArray {
 
@@ -405,18 +432,24 @@ class AccessibilityAudioService : AccessibilityService() {
         output.write((value shr 8) and 0xff)
     }
 
+    // =====================================
     // SEND AUDIO TO CLOUDFLARE WORKER
+    // =====================================
 
     private fun sendAudioToWorker(wav: ByteArray) {
 
         if (!callActive) return
 
         try {
+
             networkExecutor.execute {
 
                 var connection: HttpURLConnection? = null
 
                 try {
+
+                    if (!callActive) return@execute
+
                     val language = getApiLanguage()
 
                     val url = URL(
@@ -464,7 +497,8 @@ class AccessibilityAudioService : AccessibilityService() {
                         ?.use { it.readText() }
                         ?: ""
 
-                    if (responseCode != 200) {
+                    if (responseCode !in 200..299) {
+
                         throw Exception(
                             "Worker HTTP $responseCode: $responseText"
                         )
@@ -473,6 +507,7 @@ class AccessibilityAudioService : AccessibilityService() {
                     val result = JSONObject(responseText)
 
                     if (!result.optBoolean("success", false)) {
+
                         throw Exception(
                             result.optString(
                                 "error",
@@ -492,11 +527,13 @@ class AccessibilityAudioService : AccessibilityService() {
                     ).trim()
 
                     if (original.isBlank()) {
+
                         mainHandler.post {
                             if (callActive) {
                                 updateStatus("কথা শনাক্ত হয়নি")
                             }
                         }
+
                         return@execute
                     }
 
@@ -506,15 +543,17 @@ class AccessibilityAudioService : AccessibilityService() {
 
                     lastRecognizedText = original
 
-                    val message = if (
-                        language == "bn"
-                    ) {
+                    val message = if (language == "bn") {
+
                         "মূল কথা: $original\n\nবাংলা: $bengali"
+
                     } else {
+
                         "মূল কথা: $original\n\nবাংলা অনুবাদ: $bengali"
                     }
 
                     mainHandler.post {
+
                         if (!callActive) return@post
 
                         sendPopupUpdate(
@@ -526,6 +565,7 @@ class AccessibilityAudioService : AccessibilityService() {
                 } catch (e: Exception) {
 
                     mainHandler.post {
+
                         if (!callActive) return@post
 
                         updateStatus(
@@ -539,19 +579,26 @@ class AccessibilityAudioService : AccessibilityService() {
             }
 
         } catch (e: Exception) {
-            updateStatus("NETWORK QUEUE ERROR: ${e.message}")
+
+            updateStatus(
+                "NETWORK QUEUE ERROR: ${e.message}"
+            )
         }
     }
 
+    // =====================================
     // UPDATE POPUP
+    // =====================================
 
     private fun sendPopupUpdate(
         message: String,
         status: String
     ) {
+
         if (!callActive) return
 
         try {
+
             val intent = Intent(
                 this,
                 FloatingTranslatorService::class.java
@@ -573,11 +620,16 @@ class AccessibilityAudioService : AccessibilityService() {
             startService(intent)
 
         } catch (e: Exception) {
-            updateStatus("POPUP UPDATE ERROR: ${e.message}")
+
+            updateStatus(
+                "POPUP UPDATE ERROR: ${e.message}"
+            )
         }
     }
 
+    // =====================================
     // STATUS OVERLAY
+    // =====================================
 
     private fun showStatusOverlay(message: String) {
 
@@ -587,6 +639,7 @@ class AccessibilityAudioService : AccessibilityService() {
         }
 
         try {
+
             val view = TextView(this).apply {
                 text = message
                 textSize = 12f
@@ -607,6 +660,7 @@ class AccessibilityAudioService : AccessibilityService() {
                 PixelFormat.TRANSLUCENT
 
             ).apply {
+
                 gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
                 y = 45
             }
@@ -616,6 +670,7 @@ class AccessibilityAudioService : AccessibilityService() {
             statusView = view
 
         } catch (e: Exception) {
+
             updateStatus("OVERLAY ERROR: ${e.message}")
         }
     }
@@ -627,6 +682,7 @@ class AccessibilityAudioService : AccessibilityService() {
             statusView?.text = message
 
             try {
+
                 val intent = Intent(
                     this,
                     FloatingTranslatorService::class.java
@@ -647,46 +703,58 @@ class AccessibilityAudioService : AccessibilityService() {
         }
     }
 
+    // =====================================
     // STOP AUDIO CAPTURE
+    // =====================================
 
     private fun stopAudioCapture() {
 
         recordingRunning.set(false)
 
         try {
+
             audioRecord?.let { recorder ->
+
                 try {
                     recorder.stop()
                 } catch (_: Exception) {
                 }
             }
+
         } catch (_: Exception) {
         }
 
         audioRecord = null
     }
 
+    // =====================================
     // REMOVE OVERLAY
+    // =====================================
 
     private fun removeStatusOverlay() {
 
         try {
+
             statusView?.let {
                 windowManager?.removeView(it)
             }
+
         } catch (_: Exception) {
         }
 
         statusView = null
     }
 
+    // =====================================
     // ACCESSIBILITY LIFECYCLE
+    // =====================================
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // No screen content is collected.
     }
 
     override fun onInterrupt() {
+
         callActive = false
         stopAudioCapture()
     }
@@ -700,12 +768,14 @@ class AccessibilityAudioService : AccessibilityService() {
         hideTranslatorPopup()
 
         try {
+
             phoneListener?.let {
                 telephonyManager?.listen(
                     it,
                     PhoneStateListener.LISTEN_NONE
                 )
             }
+
         } catch (_: Exception) {
         }
 
