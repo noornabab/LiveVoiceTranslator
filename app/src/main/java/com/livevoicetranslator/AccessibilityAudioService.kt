@@ -8,13 +8,13 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyManager
 import android.view.Gravity
@@ -22,34 +22,52 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.widget.TextView
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class AccessibilityAudioService : AccessibilityService() {
 
     companion object {
         private const val PREFS_NAME = "LiveVoiceSettings"
         private const val PREF_LANGUAGE = "speech_language"
+
+        private const val WORKER_URL =
+            "https://live-voice-translator.support446-ff6.workers.dev"
+
+        private const val SAMPLE_RATE = 44100
+        private const val CHANNELS = 1
+        private const val BITS_PER_SAMPLE = 16
+
+        private const val CHUNK_SECONDS = 6
     }
 
     private var telephonyManager: TelephonyManager? = null
     private var phoneListener: PhoneStateListener? = null
-    private var speechRecognizer: SpeechRecognizer? = null
 
     @Volatile
     private var callActive = false
+
+    @Volatile
+    private var audioRecord: AudioRecord? = null
+
+    private val recordingRunning = AtomicBoolean(false)
 
     private var windowManager: WindowManager? = null
     private var statusView: TextView? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private val translationExecutor =
+    private val recordingExecutor =
         Executors.newSingleThreadExecutor()
 
-    private var restartRunnable: Runnable? = null
+    private val networkExecutor =
+        Executors.newSingleThreadExecutor()
+
+    @Volatile
+    private var lastRecognizedText = ""
 
     // SERVICE CONNECTED
 
@@ -60,11 +78,13 @@ class AccessibilityAudioService : AccessibilityService() {
             getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
         showStatusOverlay("Live Voice Translator প্রস্তুত")
+
         startPhoneMonitoring()
     }
 
     // PHONE MONITORING
 
+    @Suppress("DEPRECATION")
     private fun startPhoneMonitoring() {
         try {
             if (
@@ -92,10 +112,11 @@ class AccessibilityAudioService : AccessibilityService() {
                             if (callActive) return
 
                             callActive = true
+                            lastRecognizedText = ""
 
                             showStatusOverlay("কল সংযুক্ত")
                             showTranslatorPopup()
-                            startSpeechRecognition()
+                            startAudioCapture()
                         }
 
                         TelephonyManager.CALL_STATE_IDLE -> {
@@ -103,8 +124,9 @@ class AccessibilityAudioService : AccessibilityService() {
 
                             callActive = false
 
-                            stopSpeechRecognition()
+                            stopAudioCapture()
                             hideTranslatorPopup()
+
                             updateStatus("কল শেষ")
                         }
 
@@ -126,7 +148,7 @@ class AccessibilityAudioService : AccessibilityService() {
             ) {
                 callActive = true
                 showTranslatorPopup()
-                startSpeechRecognition()
+                startAudioCapture()
             }
 
         } catch (e: Exception) {
@@ -181,9 +203,19 @@ class AccessibilityAudioService : AccessibilityService() {
         ) ?: "bn-BD"
     }
 
-    // SPEECH RECOGNITION
+    private fun getApiLanguage(): String {
+        return when (getSelectedLanguage()) {
+            "en-US", "en-IN", "en" -> "en"
+            "ar-SA", "ar" -> "ar"
+            "hi-IN", "hi" -> "hi"
+            "bn-BD", "bn" -> "bn"
+            else -> "bn"
+        }
+    }
 
-    private fun startSpeechRecognition() {
+    // START AUDIO CAPTURE
+
+    private fun startAudioCapture() {
         if (!callActive) return
 
         if (
@@ -194,329 +226,310 @@ class AccessibilityAudioService : AccessibilityService() {
             return
         }
 
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            updateStatus("Speech Recognition service পাওয়া যায়নি")
+        if (!recordingRunning.compareAndSet(false, true)) {
             return
         }
 
-        try {
-            stopSpeechRecognition()
+        updateStatus("মাইক্রোফোন প্রস্তুত হচ্ছে...")
 
-            speechRecognizer =
-                if (
-                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                    SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
-                ) {
-                    SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
-                } else {
-                    SpeechRecognizer.createSpeechRecognizer(this)
+        recordingExecutor.execute {
+
+            var recorder: AudioRecord? = null
+
+            try {
+                val minBuffer = AudioRecord.getMinBufferSize(
+                    SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT
+                )
+
+                if (minBuffer <= 0) {
+                    throw Exception("Invalid audio buffer: $minBuffer")
                 }
 
-            speechRecognizer?.setRecognitionListener(
-                recognitionListener
-            )
+                val bufferSize = maxOf(
+                    minBuffer * 2,
+                    SAMPLE_RATE * 2
+                )
 
-            updateStatus("Speech Recognition চালু হচ্ছে...")
-            startListening()
+                recorder = AudioRecord(
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufferSize
+                )
 
-        } catch (e: Exception) {
-            updateStatus("SPEECH ERROR: ${e.message}")
-            scheduleRecognitionRestart(1500)
+                if (
+                    recorder.state != AudioRecord.STATE_INITIALIZED
+                ) {
+                    throw Exception("AudioRecord initialization failed")
+                }
+
+                audioRecord = recorder
+
+                recorder.startRecording()
+
+                mainHandler.post {
+                    if (callActive) {
+                        updateStatus("অডিও রেকর্ডিং চলছে")
+                    }
+                }
+
+                val chunkSize =
+                    SAMPLE_RATE * CHANNELS *
+                    (BITS_PER_SAMPLE / 8) *
+                    CHUNK_SECONDS
+
+                val readBuffer = ByteArray(8192)
+
+                var audioChunk = ByteArrayOutputStream()
+
+                while (
+                    recordingRunning.get() &&
+                    callActive
+                ) {
+
+                    val count = recorder.read(
+                        readBuffer,
+                        0,
+                        readBuffer.size
+                    )
+
+                    if (count > 0) {
+                        audioChunk.write(
+                            readBuffer,
+                            0,
+                            count
+                        )
+                    } else if (count < 0) {
+                        throw Exception("Audio read error: $count")
+                    }
+
+                    if (audioChunk.size() >= chunkSize) {
+
+                        val pcm = audioChunk.toByteArray()
+
+                        audioChunk = ByteArrayOutputStream()
+
+                        if (
+                            recordingRunning.get() &&
+                            callActive
+                        ) {
+                            val wav = createWav(pcm)
+
+                            sendAudioToWorker(wav)
+                        }
+                    }
+                }
+
+            } catch (e: Exception) {
+
+                if (callActive) {
+                    mainHandler.post {
+                        updateStatus(
+                            "AUDIO ERROR: ${e.message}"
+                        )
+                    }
+                }
+
+            } finally {
+
+                try {
+                    recorder?.stop()
+                } catch (_: Exception) {
+                }
+
+                try {
+                    recorder?.release()
+                } catch (_: Exception) {
+                }
+
+                if (audioRecord === recorder) {
+                    audioRecord = null
+                }
+
+                recordingRunning.set(false)
+            }
         }
     }
 
-    // RECOGNITION LISTENER
+    // CREATE WAV FILE
 
-    private val recognitionListener =
-        object : RecognitionListener {
+    private fun createWav(pcm: ByteArray): ByteArray {
 
-            override fun onReadyForSpeech(params: Bundle?) {
-                updateStatus("কথা শোনার জন্য প্রস্তুত")
-            }
+        val output = ByteArrayOutputStream()
 
-            override fun onBeginningOfSpeech() {
-                updateStatus("কথা শনাক্ত হচ্ছে...")
-            }
+        val byteRate =
+            SAMPLE_RATE * CHANNELS * BITS_PER_SAMPLE / 8
 
-            override fun onRmsChanged(rmsdB: Float) {
-            }
+        val totalDataLength = pcm.size + 36
 
-            override fun onBufferReceived(buffer: ByteArray?) {
-            }
+        output.write("RIFF".toByteArray(Charsets.US_ASCII))
+        writeIntLE(output, totalDataLength)
 
-            override fun onEndOfSpeech() {
-                updateStatus("কথা প্রক্রিয়াকরণ হচ্ছে...")
-            }
+        output.write("WAVE".toByteArray(Charsets.US_ASCII))
 
-            override fun onError(error: Int) {
-                val errorMessage = when (error) {
-                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
-                        "NETWORK TIMEOUT"
+        output.write("fmt ".toByteArray(Charsets.US_ASCII))
+        writeIntLE(output, 16)
+        writeShortLE(output, 1)
+        writeShortLE(output, CHANNELS)
+        writeIntLE(output, SAMPLE_RATE)
+        writeIntLE(output, byteRate)
+        writeShortLE(output, CHANNELS * BITS_PER_SAMPLE / 8)
+        writeShortLE(output, BITS_PER_SAMPLE)
 
-                    SpeechRecognizer.ERROR_NETWORK ->
-                        "NETWORK ERROR"
+        output.write("data".toByteArray(Charsets.US_ASCII))
+        writeIntLE(output, pcm.size)
 
-                    SpeechRecognizer.ERROR_AUDIO ->
-                        "AUDIO ERROR"
+        output.write(pcm)
 
-                    SpeechRecognizer.ERROR_SERVER ->
-                        "SERVER ERROR"
+        return output.toByteArray()
+    }
 
-                    SpeechRecognizer.ERROR_CLIENT ->
-                        "CLIENT ERROR"
+    private fun writeIntLE(
+        output: ByteArrayOutputStream,
+        value: Int
+    ) {
+        output.write(value and 0xff)
+        output.write((value shr 8) and 0xff)
+        output.write((value shr 16) and 0xff)
+        output.write((value shr 24) and 0xff)
+    }
 
-                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
-                        "SPEECH TIMEOUT"
+    private fun writeShortLE(
+        output: ByteArrayOutputStream,
+        value: Int
+    ) {
+        output.write(value and 0xff)
+        output.write((value shr 8) and 0xff)
+    }
 
-                    SpeechRecognizer.ERROR_NO_MATCH ->
-                        "NO SPEECH MATCH"
+    // SEND AUDIO TO CLOUDFLARE WORKER
 
-                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY ->
-                        "RECOGNIZER BUSY"
+    private fun sendAudioToWorker(wav: ByteArray) {
 
-                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
-                        "INSUFFICIENT PERMISSIONS"
-
-                    SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ->
-                        "LANGUAGE NOT SUPPORTED"
-
-                    SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ->
-                        "LANGUAGE MODEL UNAVAILABLE"
-
-                    SpeechRecognizer.ERROR_SERVER_DISCONNECTED ->
-                        "SERVER DISCONNECTED"
-
-                    else -> "UNKNOWN ERROR"
-                }
-
-                updateStatus(
-                    "Speech Error $error: $errorMessage"
-                )
-
-                scheduleRecognitionRestart(2000)
-            }
-
-            override fun onResults(results: Bundle?) {
-                val matches = results?.getStringArrayList(
-                    SpeechRecognizer.RESULTS_RECOGNITION
-                )
-
-                val recognizedText =
-                    matches?.firstOrNull()?.trim().orEmpty()
-
-                if (recognizedText.isNotBlank()) {
-                    processRecognizedSpeech(recognizedText)
-                }
-
-                scheduleRecognitionRestart(800)
-            }
-
-            override fun onPartialResults(partialResults: Bundle?) {
-                val matches = partialResults?.getStringArrayList(
-                    SpeechRecognizer.RESULTS_RECOGNITION
-                )
-
-                val partialText =
-                    matches?.firstOrNull()?.trim().orEmpty()
-
-                if (partialText.isNotBlank()) {
-                    sendPopupUpdate(
-                        "মূল কথা: $partialText",
-                        "কথা শনাক্ত হচ্ছে..."
-                    )
-                }
-            }
-
-            override fun onEvent(
-                eventType: Int,
-                params: Bundle?
-            ) {
-            }
-        }
-
-    // START LISTENING
-
-    private fun startListening() {
         if (!callActive) return
 
-        val recognizer = speechRecognizer ?: return
-
         try {
-            // English নির্বাচন করলে Recognition-এর জন্য en-IN ব্যবহার
-            val language = when (getSelectedLanguage()) {
-                "en-US" -> "en-IN"
-                "ar-SA" -> "ar-SA"
-                "hi-IN" -> "hi-IN"
-                else -> "bn-BD"
-            }
-
-            val intent = Intent(
-                RecognizerIntent.ACTION_RECOGNIZE_SPEECH
-            ).apply {
-
-                putExtra(
-                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-                )
-
-                putExtra(
-                    RecognizerIntent.EXTRA_LANGUAGE,
-                    language
-                )
-
-                putExtra(
-                    RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE,
-                    language
-                )
-
-                putExtra(
-                    RecognizerIntent.EXTRA_PARTIAL_RESULTS,
-                    true
-                )
-
-                putExtra(
-                    RecognizerIntent.EXTRA_MAX_RESULTS,
-                    3
-                )
-
-                putExtra(
-                    RecognizerIntent.EXTRA_PREFER_OFFLINE,
-                    false
-                )
-
-                putExtra(
-                    RecognizerIntent.EXTRA_CALLING_PACKAGE,
-                    packageName
-                )
-            }
-
-            recognizer.startListening(intent)
-
-        } catch (e: Exception) {
-            updateStatus("LISTENING ERROR: ${e.message}")
-            scheduleRecognitionRestart(2000)
-        }
-    }
-
-    // RESTART RECOGNITION
-
-    private fun scheduleRecognitionRestart(delay: Long) {
-        restartRunnable?.let {
-            mainHandler.removeCallbacks(it)
-        }
-
-        val runnable = Runnable {
-            if (callActive) {
-                try {
-                    speechRecognizer?.cancel()
-                    startListening()
-                } catch (e: Exception) {
-                    updateStatus("RESTART ERROR: ${e.message}")
-                    scheduleRecognitionRestart(2500)
-                }
-            }
-        }
-
-        restartRunnable = runnable
-
-        mainHandler.postDelayed(
-            runnable,
-            delay
-        )
-    }
-
-    // PROCESS SPEECH
-
-    private fun processRecognizedSpeech(text: String) {
-        val language = getSelectedLanguage()
-
-        if (language == "bn-BD") {
-            sendPopupUpdate(
-                "মূল কথা: $text\n\nবাংলা: $text",
-                "বাংলা কথা শনাক্ত হয়েছে"
-            )
-            return
-        }
-
-        sendPopupUpdate(
-            "মূল কথা: $text\n\nবাংলা: অনুবাদ হচ্ছে...",
-            "বাংলা অনুবাদ হচ্ছে..."
-        )
-
-        translateToBangla(text, language)
-    }
-
-    // TRANSLATE TO BANGLA
-
-    private fun translateToBangla(
-        originalText: String,
-        sourceLanguage: String
-    ) {
-        try {
-            translationExecutor.execute {
+            networkExecutor.execute {
 
                 var connection: HttpURLConnection? = null
 
                 try {
-                    val sourceCode = when (sourceLanguage) {
-                        "en-US" -> "en"
-                        "ar-SA" -> "ar"
-                        "hi-IN" -> "hi"
-                        else -> "en"
-                    }
-
-                    val encoded = URLEncoder.encode(
-                        originalText,
-                        "UTF-8"
-                    )
+                    val language = getApiLanguage()
 
                     val url = URL(
-                        "https://api.mymemory.translated.net/get" +
-                            "?q=$encoded&langpair=$sourceCode|bn"
+                        "$WORKER_URL/transcribe?language=$language"
                     )
 
                     connection =
                         url.openConnection() as HttpURLConnection
 
-                    connection.requestMethod = "GET"
-                    connection.connectTimeout = 15000
-                    connection.readTimeout = 15000
+                    connection.requestMethod = "POST"
+                    connection.connectTimeout = 20000
+                    connection.readTimeout = 60000
+                    connection.doOutput = true
+
+                    connection.setRequestProperty(
+                        "Content-Type",
+                        "audio/wav"
+                    )
+
+                    connection.setRequestProperty(
+                        "Accept",
+                        "application/json"
+                    )
+
+                    connection.setFixedLengthStreamingMode(
+                        wav.size
+                    )
+
+                    connection.outputStream.use {
+                        it.write(wav)
+                        it.flush()
+                    }
 
                     val responseCode = connection.responseCode
 
+                    val responseStream =
+                        if (responseCode in 200..299) {
+                            connection.inputStream
+                        } else {
+                            connection.errorStream
+                        }
+
+                    val responseText = responseStream
+                        ?.bufferedReader()
+                        ?.use { it.readText() }
+                        ?: ""
+
                     if (responseCode != 200) {
-                        throw Exception("HTTP $responseCode")
+                        throw Exception(
+                            "Worker HTTP $responseCode: $responseText"
+                        )
                     }
 
-                    val response = connection.inputStream
-                        .bufferedReader()
-                        .use { it.readText() }
+                    val result = JSONObject(responseText)
 
-                    val translated = JSONObject(response)
-                        .getJSONObject("responseData")
-                        .optString("translatedText", "")
-                        .trim()
+                    if (!result.optBoolean("success", false)) {
+                        throw Exception(
+                            result.optString(
+                                "error",
+                                "Recognition failed"
+                            )
+                        )
+                    }
 
-                    if (translated.isBlank()) {
-                        throw Exception("Empty translation")
+                    val original = result.optString(
+                        "original",
+                        ""
+                    ).trim()
+
+                    val bengali = result.optString(
+                        "bengali",
+                        ""
+                    ).trim()
+
+                    if (original.isBlank()) {
+                        mainHandler.post {
+                            if (callActive) {
+                                updateStatus("কথা শনাক্ত হয়নি")
+                            }
+                        }
+                        return@execute
+                    }
+
+                    if (original == lastRecognizedText) {
+                        return@execute
+                    }
+
+                    lastRecognizedText = original
+
+                    val message = if (
+                        language == "bn"
+                    ) {
+                        "মূল কথা: $original\n\nবাংলা: $bengali"
+                    } else {
+                        "মূল কথা: $original\n\nবাংলা অনুবাদ: $bengali"
                     }
 
                     mainHandler.post {
                         if (!callActive) return@post
 
                         sendPopupUpdate(
-                            "মূল কথা: $originalText\n\nবাংলা অনুবাদ: $translated",
-                            "বাংলা অনুবাদ সম্পন্ন"
+                            message,
+                            "কথা শনাক্ত ও অনুবাদ সম্পন্ন"
                         )
                     }
 
                 } catch (e: Exception) {
+
                     mainHandler.post {
                         if (!callActive) return@post
 
-                        sendPopupUpdate(
-                            "মূল কথা: $originalText\n\nবাংলা অনুবাদ পাওয়া যায়নি।",
-                            "TRANSLATION FAILED"
+                        updateStatus(
+                            "WORKER ERROR: ${e.message}"
                         )
                     }
 
@@ -524,8 +537,9 @@ class AccessibilityAudioService : AccessibilityService() {
                     connection?.disconnect()
                 }
             }
+
         } catch (e: Exception) {
-            updateStatus("TRANSLATION QUEUE ERROR: ${e.message}")
+            updateStatus("NETWORK QUEUE ERROR: ${e.message}")
         }
     }
 
@@ -566,6 +580,7 @@ class AccessibilityAudioService : AccessibilityService() {
     // STATUS OVERLAY
 
     private fun showStatusOverlay(message: String) {
+
         if (statusView != null) {
             updateStatus(message)
             return
@@ -583,21 +598,21 @@ class AccessibilityAudioService : AccessibilityService() {
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
-                } else {
-                    @Suppress("DEPRECATION")
-                    WindowManager.LayoutParams.TYPE_PHONE
-                },
+
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+
                 PixelFormat.TRANSLUCENT
+
             ).apply {
                 gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
                 y = 45
             }
 
             windowManager?.addView(view, params)
+
             statusView = view
 
         } catch (e: Exception) {
@@ -606,7 +621,9 @@ class AccessibilityAudioService : AccessibilityService() {
     }
 
     private fun updateStatus(message: String) {
+
         mainHandler.post {
+
             statusView?.text = message
 
             try {
@@ -630,31 +647,29 @@ class AccessibilityAudioService : AccessibilityService() {
         }
     }
 
-    // STOP RECOGNITION
+    // STOP AUDIO CAPTURE
 
-    private fun stopSpeechRecognition() {
-        restartRunnable?.let {
-            mainHandler.removeCallbacks(it)
-        }
+    private fun stopAudioCapture() {
 
-        restartRunnable = null
+        recordingRunning.set(false)
 
         try {
-            speechRecognizer?.cancel()
+            audioRecord?.let { recorder ->
+                try {
+                    recorder.stop()
+                } catch (_: Exception) {
+                }
+            }
         } catch (_: Exception) {
         }
 
-        try {
-            speechRecognizer?.destroy()
-        } catch (_: Exception) {
-        }
-
-        speechRecognizer = null
+        audioRecord = null
     }
 
     // REMOVE OVERLAY
 
     private fun removeStatusOverlay() {
+
         try {
             statusView?.let {
                 windowManager?.removeView(it)
@@ -673,13 +688,15 @@ class AccessibilityAudioService : AccessibilityService() {
 
     override fun onInterrupt() {
         callActive = false
-        stopSpeechRecognition()
+        stopAudioCapture()
     }
 
+    @Suppress("DEPRECATION")
     override fun onDestroy() {
+
         callActive = false
 
-        stopSpeechRecognition()
+        stopAudioCapture()
         hideTranslatorPopup()
 
         try {
@@ -693,7 +710,9 @@ class AccessibilityAudioService : AccessibilityService() {
         }
 
         removeStatusOverlay()
-        translationExecutor.shutdownNow()
+
+        recordingExecutor.shutdownNow()
+        networkExecutor.shutdownNow()
 
         super.onDestroy()
     }
