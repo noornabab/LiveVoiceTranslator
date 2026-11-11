@@ -1,3 +1,4 @@
+
 package com.livevoicetranslator
 
 import android.app.Notification
@@ -45,7 +46,6 @@ class VoiceForegroundService : Service() {
     private var foregroundStarted = false
     private var currentLanguage = "en-US"
     private var retryCount = 0
-
     private var lastAudioLevelUpdate = 0L
 
     private val restartRunnable = Runnable {
@@ -83,7 +83,6 @@ class VoiceForegroundService : Service() {
 
             ACTION_STOP_LISTENING -> {
                 stopListening()
-
                 updateNotification("Listening stopped")
 
                 updatePopup(
@@ -122,9 +121,7 @@ class VoiceForegroundService : Service() {
             )
 
             val manager =
-                getSystemService(
-                    NotificationManager::class.java
-                )
+                getSystemService(NotificationManager::class.java)
 
             manager.createNotificationChannel(channel)
         }
@@ -134,9 +131,7 @@ class VoiceForegroundService : Service() {
     // CREATE NOTIFICATION
     // =====================================
 
-    private fun createNotification(
-        message: String
-    ): Notification {
+    private fun createNotification(message: String): Notification {
 
         val builder =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -205,9 +200,7 @@ class VoiceForegroundService : Service() {
         try {
 
             val manager =
-                getSystemService(
-                    NotificationManager::class.java
-                )
+                getSystemService(NotificationManager::class.java)
 
             manager.notify(
                 NOTIFICATION_ID,
@@ -225,16 +218,10 @@ class VoiceForegroundService : Service() {
     private fun getSelectedLanguage(): String {
 
         val preferences =
-            getSharedPreferences(
-                PREF_NAME,
-                MODE_PRIVATE
-            )
+            getSharedPreferences(PREF_NAME, MODE_PRIVATE)
 
         val selected =
-            preferences.getString(
-                PREF_LANGUAGE,
-                "en-US"
-            ) ?: "en-US"
+            preferences.getString(PREF_LANGUAGE, "en-US") ?: "en-US"
 
         return when (selected) {
             "bn-BD" -> "bn-BD"
@@ -245,9 +232,7 @@ class VoiceForegroundService : Service() {
         }
     }
 
-    private fun getTranslationLanguage(
-        language: String
-    ): String {
+    private fun getTranslationLanguage(language: String): String {
 
         return when {
             language.startsWith("en") -> "en"
@@ -264,7 +249,6 @@ class VoiceForegroundService : Service() {
     private fun startListening() {
 
         stopRecognizerOnly()
-
         handler.removeCallbacks(restartRunnable)
 
         listening = true
@@ -273,7 +257,7 @@ class VoiceForegroundService : Service() {
 
         currentLanguage = getSelectedLanguage()
 
-        updateNotification("Listening active")
+        updateNotification("Starting speech recognition...")
 
         updatePopup(
             "মাইক্রোফোন প্রস্তুত হচ্ছে...",
@@ -295,6 +279,8 @@ class VoiceForegroundService : Service() {
 
             if (!SpeechRecognizer.isRecognitionAvailable(this)) {
 
+                updateNotification("ERROR: Speech service unavailable")
+
                 updatePopup(
                     "Speech Recognition পাওয়া যাচ্ছে না।",
                     "RECOGNITION ERROR"
@@ -309,15 +295,15 @@ class VoiceForegroundService : Service() {
             speechRecognizer?.setRecognitionListener(
                 object : RecognitionListener {
 
-                    override fun onReadyForSpeech(
-                        params: Bundle?
-                    ) {
+                    override fun onReadyForSpeech(params: Bundle?) {
 
                         if (!listening) return
 
+                        updateNotification("Microphone ready - Listening")
+
                         updatePopup(
-                            "কথা বলুন। কলের অডিও পরীক্ষা চলছে...",
-                            "🎙 AUDIO LEVEL: অপেক্ষা..."
+                            "কথা বলুন। অডিও পরীক্ষা চলছে...",
+                            "🎙 MICROPHONE READY"
                         )
                     }
 
@@ -325,28 +311,25 @@ class VoiceForegroundService : Service() {
 
                         if (!listening) return
 
+                        updateNotification("Speech detected")
+
                         updatePopup(
-                            "আপনার কথা শোনা হচ্ছে...",
-                            "🎙 SPEAKING"
+                            "কথা শোনা যাচ্ছে...",
+                            "🎙 SPEECH DETECTED"
                         )
                     }
 
                     // =====================================
-                    // LIVE AUDIO LEVEL
+                    // AUDIO LEVEL
                     // =====================================
 
-                    override fun onRmsChanged(
-                        rmsdB: Float
-                    ) {
+                    override fun onRmsChanged(rmsdB: Float) {
 
                         if (!listening) return
 
-                        val now =
-                            SystemClock.elapsedRealtime()
+                        val now = SystemClock.elapsedRealtime()
 
-                        if (
-                            now - lastAudioLevelUpdate < 500
-                        ) {
+                        if (now - lastAudioLevelUpdate < 700) {
                             return
                         }
 
@@ -364,20 +347,22 @@ class VoiceForegroundService : Service() {
                                 .toInt()
                                 .coerceIn(0, 100)
 
+                        updateNotification("Audio activity: $level%")
+
                         updatePopup(
-                            "কলের অডিও পরীক্ষা চলছে...",
+                            "অডিও পরীক্ষা চলছে...",
                             "🎙 AUDIO LEVEL: $level%"
                         )
                     }
 
-                    override fun onBufferReceived(
-                        buffer: ByteArray?
-                    ) {
+                    override fun onBufferReceived(buffer: ByteArray?) {
                     }
 
                     override fun onEndOfSpeech() {
 
                         if (!listening) return
+
+                        updateNotification("Speech ended - Processing")
 
                         updatePopup(
                             "কথা শনাক্ত করা হচ্ছে...",
@@ -395,33 +380,44 @@ class VoiceForegroundService : Service() {
 
                         val message = when (error) {
 
-                            SpeechRecognizer.ERROR_SERVER_DISCONNECTED ->
-                                "Recognition সার্ভার বিচ্ছিন্ন। পুনরায় সংযোগ করছি..."
+                            SpeechRecognizer.ERROR_AUDIO ->
+                                "Audio recording error"
 
-                            SpeechRecognizer.ERROR_NO_MATCH ->
-                                "কথা শনাক্ত হয়নি। আবার চেষ্টা করছি..."
-
-                            SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
-                                "কোনো কথা পাওয়া যায়নি। আবার চেষ্টা করছি..."
-
-                            SpeechRecognizer.ERROR_NETWORK ->
-                                "ইন্টারনেট সংযোগ পরীক্ষা করুন।"
-
-                            SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
-                                "ইন্টারনেটের উত্তর আসতে দেরি হচ্ছে।"
+                            SpeechRecognizer.ERROR_CLIENT ->
+                                "Recognition client error"
 
                             SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
-                                "মাইক্রোফোন permission নেই।"
+                                "Microphone permission missing"
+
+                            SpeechRecognizer.ERROR_NETWORK ->
+                                "Network error"
+
+                            SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
+                                "Network timeout"
+
+                            SpeechRecognizer.ERROR_NO_MATCH ->
+                                "No speech recognized"
 
                             SpeechRecognizer.ERROR_RECOGNIZER_BUSY ->
-                                "Speech Recognition ব্যস্ত।"
+                                "Recognition service busy"
+
+                            SpeechRecognizer.ERROR_SERVER ->
+                                "Recognition server error"
+
+                            SpeechRecognizer.ERROR_SERVER_DISCONNECTED ->
+                                "Recognition server disconnected"
+
+                            SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
+                                "No speech input detected"
 
                             else ->
-                                "Speech Error: $error"
+                                "Speech error code: $error"
                         }
 
+                        updateNotification("ERROR $error: $message")
+
                         updatePopup(
-                            message,
+                            "$message (Error $error)",
                             "RECONNECTING"
                         )
 
@@ -433,10 +429,7 @@ class VoiceForegroundService : Service() {
                             retryCount++
 
                             scheduleRestart(
-                                minOf(
-                                    1500L * retryCount,
-                                    6000L
-                                ),
+                                minOf(1500L * retryCount, 6000L),
                                 true
                             )
 
@@ -450,9 +443,7 @@ class VoiceForegroundService : Service() {
                     // FINAL RESULTS
                     // =====================================
 
-                    override fun onResults(
-                        results: Bundle?
-                    ) {
+                    override fun onResults(results: Bundle?) {
 
                         if (!listening) return
 
@@ -462,13 +453,13 @@ class VoiceForegroundService : Service() {
                             )
 
                         val spokenText =
-                            matches?.firstOrNull()
-                                ?.trim()
-                                .orEmpty()
+                            matches?.firstOrNull()?.trim().orEmpty()
 
                         if (spokenText.isNotBlank()) {
 
                             retryCount = 0
+
+                            updateNotification("Speech recognized")
 
                             processRecognizedText(
                                 spokenText,
@@ -476,6 +467,8 @@ class VoiceForegroundService : Service() {
                             )
 
                         } else {
+
+                            updateNotification("No speech recognized")
 
                             updatePopup(
                                 "কথা শনাক্ত হয়নি। আবার বলুন...",
@@ -490,9 +483,7 @@ class VoiceForegroundService : Service() {
                     // PARTIAL RESULTS
                     // =====================================
 
-                    override fun onPartialResults(
-                        partialResults: Bundle?
-                    ) {
+                    override fun onPartialResults(partialResults: Bundle?) {
 
                         if (!listening) return
 
@@ -502,11 +493,11 @@ class VoiceForegroundService : Service() {
                             )
 
                         val partialText =
-                            matches?.firstOrNull()
-                                ?.trim()
-                                .orEmpty()
+                            matches?.firstOrNull()?.trim().orEmpty()
 
                         if (partialText.isNotBlank()) {
+
+                            updateNotification("Speech detected: $partialText")
 
                             updatePopup(
                                 "শোনা হচ্ছে:\n$partialText",
@@ -526,6 +517,8 @@ class VoiceForegroundService : Service() {
             speechRecognizer != null
 
         } catch (e: Exception) {
+
+            updateNotification("Recognizer creation failed")
 
             updatePopup(
                 "Recognizer Error: ${e.message}",
@@ -591,9 +584,13 @@ class VoiceForegroundService : Service() {
                 )
             }
 
+            updateNotification("Starting microphone recognition...")
+
             speechRecognizer?.startListening(intent)
 
         } catch (e: Exception) {
+
+            updateNotification("Start error: ${e.message}")
 
             updatePopup(
                 "Listening Error: ${e.message}",
@@ -621,10 +618,7 @@ class VoiceForegroundService : Service() {
             stopRecognizerOnly()
         }
 
-        handler.postDelayed(
-            restartRunnable,
-            delay
-        )
+        handler.postDelayed(restartRunnable, delay)
     }
 
     // =====================================
@@ -638,13 +632,14 @@ class VoiceForegroundService : Service() {
 
         if (!listening) return
 
-        val sourceLanguage =
-            getTranslationLanguage(language)
+        val sourceLanguage = getTranslationLanguage(language)
 
         if (
             sourceLanguage == "bn" ||
             containsBangla(spokenText)
         ) {
+
+            updateNotification("Bengali speech recognized")
 
             updatePopup(
                 spokenText,
@@ -654,6 +649,8 @@ class VoiceForegroundService : Service() {
             return
         }
 
+        updateNotification("Translating recognized speech...")
+
         updatePopup(
             "মূল কথা:\n$spokenText\n\nবাংলায় অনুবাদ হচ্ছে...",
             "TRANSLATING"
@@ -662,10 +659,7 @@ class VoiceForegroundService : Service() {
         Thread {
 
             val translatedText =
-                translateToBangla(
-                    spokenText,
-                    sourceLanguage
-                )
+                translateToBangla(spokenText, sourceLanguage)
 
             handler.post {
 
@@ -673,12 +667,16 @@ class VoiceForegroundService : Service() {
 
                 if (translatedText.isNotBlank()) {
 
+                    updateNotification("Translation completed")
+
                     updatePopup(
                         "মূল কথা:\n$spokenText\n\nবাংলা অনুবাদ:\n$translatedText",
                         "বাংলা অনুবাদ সম্পন্ন"
                     )
 
                 } else {
+
+                    updateNotification("Translation failed")
 
                     updatePopup(
                         "মূল কথা:\n$spokenText\n\nবাংলা অনুবাদ পাওয়া যায়নি।",
@@ -799,8 +797,7 @@ class VoiceForegroundService : Service() {
                 FloatingTranslatorService::class.java
             ).apply {
 
-                action =
-                    FloatingTranslatorService.ACTION_UPDATE
+                action = FloatingTranslatorService.ACTION_UPDATE
 
                 putExtra(
                     FloatingTranslatorService.EXTRA_MESSAGE,
@@ -832,7 +829,5 @@ class VoiceForegroundService : Service() {
         super.onDestroy()
     }
 
-    override fun onBind(
-        intent: Intent?
-    ): IBinder? = null
+    override fun onBind(intent: Intent?): IBinder? = null
 }
