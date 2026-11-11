@@ -18,6 +18,9 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.WindowManager.LayoutParams
+import android.view.inputmethod.InputMethodManager
+import android.content.Context
+import android.view.inputmethod.EditorInfo
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -51,7 +54,7 @@ class FloatingTranslatorService : Service() {
     private lateinit var params: LayoutParams
 
     private var popupVisible = false
-    private var minimized = false
+    private var minimized = true
 
     private var expandedHeight = 0
     private var minimizedHeight = 0
@@ -78,9 +81,7 @@ class FloatingTranslatorService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-
-        windowManager =
-            getSystemService(WINDOW_SERVICE) as WindowManager
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
     }
 
     override fun onStartCommand(
@@ -91,13 +92,8 @@ class FloatingTranslatorService : Service() {
 
         when (intent?.action) {
 
-            // শুধু MainActivity থেকে কল শুরু হলে Popup খুলবে।
-            ACTION_SHOW -> {
-                showPopup()
-            }
+            ACTION_SHOW -> showPopup()
 
-            // Popup আগে থেকে খোলা থাকলেই আপডেট হবে।
-            // Popup বন্ধ থাকলে কখনোই নতুন করে খুলবে না।
             ACTION_UPDATE -> {
 
                 if (!popupVisible) {
@@ -105,18 +101,14 @@ class FloatingTranslatorService : Service() {
                     return START_NOT_STICKY
                 }
 
-                val message =
-                    intent.getStringExtra(EXTRA_MESSAGE)
-
-                val status =
-                    intent.getStringExtra(EXTRA_STATUS)
+                val message = intent.getStringExtra(EXTRA_MESSAGE)
+                val status = intent.getStringExtra(EXTRA_STATUS)
 
                 if (status != null) {
                     statusView?.text = status
                 }
 
                 if (message != null) {
-
                     speechView?.text = message
 
                     if (isFinalSpeech(status)) {
@@ -125,24 +117,14 @@ class FloatingTranslatorService : Service() {
                 }
             }
 
-            // কল শেষ হলে Popup বন্ধ হবে।
-            ACTION_HIDE -> {
-                hidePopup()
-            }
+            ACTION_HIDE -> hidePopup()
         }
 
         return START_NOT_STICKY
     }
 
-    // =====================================
-    // BASIC HELPERS
-    // =====================================
-
     private fun dp(value: Int): Int {
-
-        return (
-            value * resources.displayMetrics.density
-        ).toInt()
+        return (value * resources.displayMetrics.density).toInt()
     }
 
     private fun roundedBackground(
@@ -157,7 +139,6 @@ class FloatingTranslatorService : Service() {
     }
 
     private fun isFinalSpeech(status: String?): Boolean {
-
         return status == "বাংলা অনুবাদ সম্পন্ন" ||
             status == "বাংলা কথা শনাক্ত হয়েছে" ||
             status == "TRANSLATION FAILED"
@@ -172,36 +153,24 @@ class FloatingTranslatorService : Service() {
         val cleanMessage = message.trim()
 
         if (cleanMessage.isBlank()) return
-
         if (cleanMessage == lastHistoryEntry) return
 
         lastHistoryEntry = cleanMessage
 
         mainHandler.post {
 
-            val history =
-                speechHistoryView ?: return@post
-
-            val existing =
-                history.text.toString()
+            val history = speechHistoryView ?: return@post
+            val existing = history.text.toString()
 
             history.text =
-                if (
-                    existing == "এখনো কোনো কথা শনাক্ত হয়নি।"
-                ) {
+                if (existing == "এখনো কোনো কথা শনাক্ত হয়নি।") {
                     cleanMessage
                 } else {
                     "$existing\n\n────────────────\n\n$cleanMessage"
                 }
 
-            history.post {
-
-                historyScrollView?.post {
-
-                    historyScrollView?.fullScroll(
-                        View.FOCUS_DOWN
-                    )
-                }
+            historyScrollView?.post {
+                historyScrollView?.fullScroll(View.FOCUS_DOWN)
             }
         }
     }
@@ -214,35 +183,28 @@ class FloatingTranslatorService : Service() {
 
         if (popupVisible) return
 
-        minimized = false
+        minimized = true
         lastHistoryEntry = ""
 
-        expandedHeight =
-            (
-                resources.displayMetrics.heightPixels * 0.65
-            ).toInt()
+        val screenHeight =
+            resources.displayMetrics.heightPixels
 
-        minimizedHeight = dp(68)
+        expandedHeight = (screenHeight * 0.48).toInt()
+        minimizedHeight = dp(58)
 
         rootView = ScrollView(this).apply {
             setBackgroundColor(Color.TRANSPARENT)
             isFillViewport = true
+            isVerticalScrollBarEnabled = true
         }
 
         val mainLayout = LinearLayout(this).apply {
-
             orientation = LinearLayout.VERTICAL
-
-            setPadding(
-                dp(18),
-                dp(14),
-                dp(18),
-                dp(18)
-            )
+            setPadding(dp(12), dp(5), dp(12), dp(8))
 
             background = roundedBackground(
                 Color.rgb(25, 30, 42),
-                dp(18)
+                dp(14)
             )
         }
 
@@ -253,30 +215,23 @@ class FloatingTranslatorService : Service() {
         // =====================================
 
         val header = LinearLayout(this).apply {
-
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-
-            setPadding(
-                dp(4),
-                dp(4),
-                dp(4),
-                dp(12)
-            )
+            setPadding(dp(2), 0, dp(2), 0)
         }
 
         val title = TextView(this).apply {
 
-            text = "LIVE VOICE TRANSLATOR ↕"
-            textSize = 17f
-
+            text = "LIVE VOICE TRANSLATOR"
+            textSize = 14f
             setTextColor(Color.WHITE)
-
             typeface = Typeface.DEFAULT_BOLD
+
+            gravity = Gravity.CENTER_VERTICAL
 
             layoutParams = LinearLayout.LayoutParams(
                 0,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(46),
                 1f
             )
         }
@@ -287,30 +242,19 @@ class FloatingTranslatorService : Service() {
 
                 MotionEvent.ACTION_DOWN -> {
 
-                    dragX =
-                        event.rawX.toInt() - params.x
-
-                    dragY =
-                        event.rawY.toInt() - params.y
+                    dragX = event.rawX.toInt() - params.x
+                    dragY = event.rawY.toInt() - params.y
 
                     true
                 }
 
                 MotionEvent.ACTION_MOVE -> {
 
-                    params.x =
-                        event.rawX.toInt() - dragX
-
-                    params.y =
-                        event.rawY.toInt() - dragY
+                    params.x = event.rawX.toInt() - dragX
+                    params.y = event.rawY.toInt() - dragY
 
                     try {
-
-                        windowManager.updateViewLayout(
-                            rootView,
-                            params
-                        )
-
+                        windowManager.updateViewLayout(rootView, params)
                     } catch (_: Exception) {
                     }
 
@@ -318,25 +262,21 @@ class FloatingTranslatorService : Service() {
                 }
 
                 MotionEvent.ACTION_UP -> true
-
                 else -> false
             }
         }
 
         minimizeButton = Button(this).apply {
 
-            text = "—"
-            textSize = 16f
-
+            text = "+"
+            textSize = 19f
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.TRANSPARENT)
 
-            setPadding(
-                dp(8),
-                0,
-                dp(8),
-                0
-            )
+            minWidth = dp(40)
+            minHeight = dp(40)
+
+            setPadding(dp(4), 0, dp(4), 0)
 
             setOnClickListener {
                 toggleContent()
@@ -346,17 +286,14 @@ class FloatingTranslatorService : Service() {
         val closeButton = Button(this).apply {
 
             text = "✕"
-            textSize = 16f
-
+            textSize = 17f
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.TRANSPARENT)
 
-            setPadding(
-                dp(8),
-                0,
-                dp(8),
-                0
-            )
+            minWidth = dp(40)
+            minHeight = dp(40)
+
+            setPadding(dp(4), 0, dp(4), 0)
 
             setOnClickListener {
                 hidePopup()
@@ -383,17 +320,9 @@ class FloatingTranslatorService : Service() {
 
             text = "অনুবাদ প্রস্তুত"
             textSize = 13f
+            setTextColor(Color.rgb(100, 220, 150))
 
-            setTextColor(
-                Color.rgb(100, 220, 150)
-            )
-
-            setPadding(
-                dp(4),
-                dp(5),
-                dp(4),
-                dp(12)
-            )
+            setPadding(dp(4), dp(5), dp(4), dp(12))
         }
 
         contentLayout?.addView(statusView)
@@ -406,15 +335,9 @@ class FloatingTranslatorService : Service() {
 
             text = "Speech Language"
             textSize = 14f
-
             setTextColor(Color.WHITE)
 
-            setPadding(
-                dp(4),
-                dp(8),
-                dp(4),
-                dp(6)
-            )
+            setPadding(dp(4), dp(8), dp(4), dp(6))
         }
 
         contentLayout?.addView(languageLabel)
@@ -479,10 +402,7 @@ class FloatingTranslatorService : Service() {
                     }
 
                     preferences.edit()
-                        .putString(
-                            PREF_LANGUAGE,
-                            selectedLanguage
-                        )
+                        .putString(PREF_LANGUAGE, selectedLanguage)
                         .apply()
 
                     statusView?.text = when (position) {
@@ -516,15 +436,9 @@ class FloatingTranslatorService : Service() {
 
             text = "Live Speech"
             textSize = 14f
-
             setTextColor(Color.WHITE)
 
-            setPadding(
-                dp(4),
-                dp(14),
-                dp(4),
-                dp(6)
-            )
+            setPadding(dp(4), dp(14), dp(4), dp(6))
         }
 
         contentLayout?.addView(speechLabel)
@@ -533,15 +447,9 @@ class FloatingTranslatorService : Service() {
 
             text = "কথা বললে এখানে দেখা যাবে"
             textSize = 17f
-
             setTextColor(Color.WHITE)
 
-            setPadding(
-                dp(12),
-                dp(14),
-                dp(12),
-                dp(14)
-            )
+            setPadding(dp(12), dp(14), dp(12), dp(14))
 
             background = roundedBackground(
                 Color.rgb(45, 52, 68),
@@ -560,24 +468,16 @@ class FloatingTranslatorService : Service() {
         )
 
         // =====================================
-        // SPEECH HISTORY - FIXED BOX
+        // HISTORY
         // =====================================
 
         val historyLabel = TextView(this).apply {
 
             text = "কথোপকথন / TRANSLATION HISTORY"
             textSize = 14f
+            setTextColor(Color.rgb(120, 220, 170))
 
-            setTextColor(
-                Color.rgb(120, 220, 170)
-            )
-
-            setPadding(
-                dp(4),
-                dp(16),
-                dp(4),
-                dp(6)
-            )
+            setPadding(dp(4), dp(16), dp(4), dp(6))
         }
 
         contentLayout?.addView(historyLabel)
@@ -592,33 +492,18 @@ class FloatingTranslatorService : Service() {
                 dp(12)
             )
 
-            setPadding(
-                dp(4),
-                dp(4),
-                dp(4),
-                dp(4)
-            )
+            setPadding(dp(4), dp(4), dp(4), dp(4))
         }
 
         speechHistoryView = TextView(this).apply {
 
             text = "এখনো কোনো কথা শনাক্ত হয়নি।"
             textSize = 16f
-
             setTextColor(Color.WHITE)
 
-            setPadding(
-                dp(12),
-                dp(12),
-                dp(12),
-                dp(12)
-            )
+            setPadding(dp(12), dp(12), dp(12), dp(12))
 
-            setLineSpacing(
-                dp(3).toFloat(),
-                1f
-            )
-
+            setLineSpacing(dp(3).toFloat(), 1f)
             gravity = Gravity.TOP
         }
 
@@ -640,15 +525,9 @@ class FloatingTranslatorService : Service() {
 
             text = "বাংলায় লিখুন → English Translation"
             textSize = 14f
-
             setTextColor(Color.WHITE)
 
-            setPadding(
-                dp(4),
-                dp(18),
-                dp(4),
-                dp(6)
-            )
+            setPadding(dp(4), dp(18), dp(4), dp(6))
         }
 
         contentLayout?.addView(inputLabel)
@@ -661,19 +540,14 @@ class FloatingTranslatorService : Service() {
             setTextColor(Color.BLACK)
             setHintTextColor(Color.GRAY)
 
-            setPadding(
-                dp(12),
-                dp(10),
-                dp(12),
-                dp(10)
-            )
-
+            setPadding(dp(12), dp(10), dp(12), dp(10))
             setBackgroundColor(Color.WHITE)
 
             minLines = 2
             maxLines = 4
-
             gravity = Gravity.TOP
+
+            imeOptions = EditorInfo.IME_ACTION_DONE
         }
 
         contentLayout?.addView(
@@ -685,22 +559,16 @@ class FloatingTranslatorService : Service() {
         )
 
         // =====================================
-        // AUTOMATIC ENGLISH TRANSLATION
+        // ENGLISH TRANSLATION
         // =====================================
 
         englishResultView = TextView(this).apply {
 
             text = "English translation will appear here"
             textSize = 17f
-
             setTextColor(Color.WHITE)
 
-            setPadding(
-                dp(12),
-                dp(12),
-                dp(12),
-                dp(12)
-            )
+            setPadding(dp(12), dp(12), dp(12), dp(12))
 
             background = roundedBackground(
                 Color.rgb(45, 52, 68),
@@ -725,8 +593,8 @@ class FloatingTranslatorService : Service() {
         // =====================================
 
         params = LayoutParams(
-            (resources.displayMetrics.widthPixels * 0.88).toInt(),
-            expandedHeight,
+            (resources.displayMetrics.widthPixels * 0.94).toInt(),
+            minimizedHeight,
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -734,29 +602,30 @@ class FloatingTranslatorService : Service() {
                 LayoutParams.TYPE_PHONE
             },
 
-            LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                LayoutParams.FLAG_NOT_FOCUSABLE or
+                LayoutParams.FLAG_LAYOUT_IN_SCREEN,
 
             PixelFormat.TRANSLUCENT
 
         ).apply {
 
-            gravity =
-                Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = dp(12)
 
-            y = dp(70)
+            softInputMode =
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
+
+        // প্রথমে শুধু ছোট বার দেখাবে
+        contentLayout?.visibility = View.GONE
 
         try {
 
-            windowManager.addView(
-                rootView,
-                params
-            )
-
+            windowManager.addView(rootView, params)
             popupVisible = true
 
-        } catch (_: Exception) {
+        } catch (e: Exception) {
 
             popupVisible = false
             stopSelf()
@@ -788,13 +657,10 @@ class FloatingTranslatorService : Service() {
                     count: Int
                 ) {
 
-                    val input =
-                        s?.toString()?.trim().orEmpty()
+                    val input = s?.toString()?.trim().orEmpty()
 
                     translationRequestId++
-
-                    val requestId =
-                        translationRequestId
+                    val requestId = translationRequestId
 
                     translationRunnable?.let {
                         mainHandler.removeCallbacks(it)
@@ -805,37 +671,23 @@ class FloatingTranslatorService : Service() {
                         englishResultView?.text =
                             "English translation will appear here"
 
-                        statusView?.text =
-                            "বাংলা লিখুন"
-
+                        statusView?.text = "বাংলা লিখুন"
                         return
                     }
 
-                    englishResultView?.text =
-                        "অনুবাদ হচ্ছে..."
-
-                    statusView?.text =
-                        "English translation হচ্ছে..."
+                    englishResultView?.text = "অনুবাদ হচ্ছে..."
+                    statusView?.text = "English translation হচ্ছে..."
 
                     val runnable = Runnable {
-
-                        translateBanglaToEnglish(
-                            input,
-                            requestId
-                        )
+                        translateBanglaToEnglish(input, requestId)
                     }
 
                     translationRunnable = runnable
 
-                    mainHandler.postDelayed(
-                        runnable,
-                        700
-                    )
+                    mainHandler.postDelayed(runnable, 700)
                 }
 
-                override fun afterTextChanged(
-                    s: Editable?
-                ) {
+                override fun afterTextChanged(s: Editable?) {
                 }
             }
         )
@@ -852,68 +704,49 @@ class FloatingTranslatorService : Service() {
 
             try {
 
-                val encoded =
-                    URLEncoder.encode(
-                        input,
-                        "UTF-8"
-                    )
+                val encoded = URLEncoder.encode(input, "UTF-8")
 
                 val url = URL(
                     "https://api.mymemory.translated.net/get" +
                         "?q=$encoded&langpair=bn|en"
                 )
 
-                connection =
-                    url.openConnection() as HttpURLConnection
+                connection = url.openConnection() as HttpURLConnection
 
                 connection.requestMethod = "GET"
                 connection.connectTimeout = 10000
                 connection.readTimeout = 10000
 
-                val responseCode =
-                    connection.responseCode
+                val responseCode = connection.responseCode
 
                 if (responseCode != 200) {
                     throw Exception("HTTP $responseCode")
                 }
 
-                val response =
-                    connection.inputStream
-                        .bufferedReader()
-                        .use { it.readText() }
+                val response = connection.inputStream
+                    .bufferedReader()
+                    .use { it.readText() }
 
-                val translated =
-                    JSONObject(response)
-                        .getJSONObject("responseData")
-                        .optString(
-                            "translatedText",
-                            ""
-                        )
-                        .trim()
+                val translated = JSONObject(response)
+                    .getJSONObject("responseData")
+                    .optString("translatedText", "")
+                    .trim()
 
                 mainHandler.post {
 
-                    if (
-                        requestId != translationRequestId
-                    ) {
+                    if (requestId != translationRequestId) {
                         return@post
                     }
 
                     if (translated.isNotBlank()) {
 
-                        englishResultView?.text =
-                            translated
-
-                        statusView?.text =
-                            "English translation complete"
+                        englishResultView?.text = translated
+                        statusView?.text = "English translation complete"
 
                     } else {
 
-                        englishResultView?.text =
-                            "অনুবাদ পাওয়া যায়নি।"
-
-                        statusView?.text =
-                            "Translation unavailable"
+                        englishResultView?.text = "অনুবাদ পাওয়া যায়নি।"
+                        statusView?.text = "Translation unavailable"
                     }
                 }
 
@@ -921,21 +754,17 @@ class FloatingTranslatorService : Service() {
 
                 mainHandler.post {
 
-                    if (
-                        requestId != translationRequestId
-                    ) {
+                    if (requestId != translationRequestId) {
                         return@post
                     }
 
                     englishResultView?.text =
                         "অনুবাদ করা যায়নি। ইন্টারনেট পরীক্ষা করুন।"
 
-                    statusView?.text =
-                        "Translation failed"
+                    statusView?.text = "Translation failed"
                 }
 
             } finally {
-
                 connection?.disconnect()
             }
         }
@@ -955,29 +784,30 @@ class FloatingTranslatorService : Service() {
 
             contentLayout?.visibility = View.GONE
 
-            rootView.isFillViewport = false
-
             params.height = minimizedHeight
 
-            minimizeButton?.text = "□"
+            // ছোট অবস্থায় Keyboard focus লাগবে না
+            params.flags =
+                params.flags or LayoutParams.FLAG_NOT_FOCUSABLE
+
+            minimizeButton?.text = "+"
 
         } else {
 
             contentLayout?.visibility = View.VISIBLE
 
-            rootView.isFillViewport = true
-
             params.height = expandedHeight
 
-            minimizeButton?.text = "—"
+            // Expand অবস্থায় EditText ও Keyboard কাজ করবে
+            params.flags =
+                params.flags and LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+
+            minimizeButton?.text = "−"
         }
 
         try {
 
-            windowManager.updateViewLayout(
-                rootView,
-                params
-            )
+            windowManager.updateViewLayout(rootView, params)
 
         } catch (_: Exception) {
         }
@@ -1004,7 +834,6 @@ class FloatingTranslatorService : Service() {
         }
 
         translationRequestId++
-
         stopSelf()
     }
 
@@ -1035,7 +864,5 @@ class FloatingTranslatorService : Service() {
         super.onDestroy()
     }
 
-    override fun onBind(
-        intent: Intent?
-    ): IBinder? = null
+    override fun onBind(intent: Intent?): IBinder? = null
 }
