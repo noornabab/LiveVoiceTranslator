@@ -1,13 +1,17 @@
 
 package com.livevoicetranslator
 
+import android.Manifest
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.PixelFormat
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
+import android.os.Handler
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyManager
 import android.view.Gravity
@@ -31,6 +35,10 @@ class AccessibilityAudioService : AccessibilityService() {
     private var windowManager: WindowManager? = null
     private var statusView: TextView? = null
 
+    private val mainHandler by lazy {
+        Handler(mainLooper)
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
 
@@ -45,8 +53,8 @@ class AccessibilityAudioService : AccessibilityService() {
     private fun startPhoneMonitoring() {
         try {
             if (
-                checkSelfPermission(android.Manifest.permission.READ_PHONE_STATE) !=
-                android.content.pm.PackageManager.PERMISSION_GRANTED
+                checkSelfPermission(Manifest.permission.READ_PHONE_STATE) !=
+                PackageManager.PERMISSION_GRANTED
             ) {
                 updateStatus("PHONE PERMISSION REQUIRED")
                 return
@@ -64,13 +72,22 @@ class AccessibilityAudioService : AccessibilityService() {
                     super.onCallStateChanged(state, phoneNumber)
 
                     when (state) {
+
                         TelephonyManager.CALL_STATE_OFFHOOK -> {
                             showStatusOverlay("কল সংযুক্ত — অডিও পরীক্ষা")
+
+                            // FIX: কল শুরু হলে Translator Popup খুলবে
+                            showTranslatorPopup()
+
                             startAudioCapture()
                         }
 
                         TelephonyManager.CALL_STATE_IDLE -> {
                             stopAudioCapture()
+
+                            // FIX: কল শেষ হলে Translator Popup বন্ধ হবে
+                            hideTranslatorPopup()
+
                             updateStatus("কল শেষ")
                         }
 
@@ -86,10 +103,12 @@ class AccessibilityAudioService : AccessibilityService() {
                 PhoneStateListener.LISTEN_CALL_STATE
             )
 
+            // Service চালু হওয়ার সময় কল আগে থেকেই চললে
             if (
                 telephonyManager?.callState ==
                 TelephonyManager.CALL_STATE_OFFHOOK
             ) {
+                showTranslatorPopup()
                 startAudioCapture()
             }
 
@@ -97,6 +116,41 @@ class AccessibilityAudioService : AccessibilityService() {
             updateStatus("PHONE ERROR: ${e.message}")
         }
     }
+
+    // =====================================
+    // TRANSLATOR POPUP CONTROL
+    // =====================================
+
+    private fun showTranslatorPopup() {
+        sendPopupAction(FloatingTranslatorService.ACTION_SHOW)
+    }
+
+    private fun hideTranslatorPopup() {
+        sendPopupAction(FloatingTranslatorService.ACTION_HIDE)
+    }
+
+    private fun sendPopupAction(action: String) {
+        try {
+            val intent = Intent(
+                this,
+                FloatingTranslatorService::class.java
+            ).apply {
+                this.action = action
+            }
+
+            startService(intent)
+
+        } catch (e: Exception) {
+            mainHandler.post {
+                statusView?.text =
+                    "POPUP SERVICE ERROR: ${e.message}"
+            }
+        }
+    }
+
+    // =====================================
+    // AUDIO CAPTURE
+    // =====================================
 
     private fun startAudioCapture() {
         if (recording) return
@@ -152,10 +206,11 @@ class AccessibilityAudioService : AccessibilityService() {
                 name = "AccessibilityAudioCapture"
             ) {
                 val buffer = ShortArray(2048)
-
                 var lastUpdate = 0L
+                var packetCount = 0L
 
                 while (recording) {
+
                     val count = try {
                         recorder.read(
                             buffer,
@@ -174,6 +229,8 @@ class AccessibilityAudioService : AccessibilityService() {
                         break
                     }
 
+                    packetCount++
+
                     var sum = 0.0
                     var peak = 0
                     var nonZero = 0
@@ -189,7 +246,6 @@ class AccessibilityAudioService : AccessibilityService() {
                     }
 
                     val rms = sqrt(sum / count)
-
                     val now = System.currentTimeMillis()
 
                     if (now - lastUpdate >= 700) {
@@ -198,7 +254,7 @@ class AccessibilityAudioService : AccessibilityService() {
                         val result = if (nonZero == 0) {
                             "ZERO PCM — কোনো অডিও আসছে না"
                         } else {
-                            "AUDIO ACTIVE | RMS: ${rms.toInt()} | PEAK: $peak"
+                            "AUDIO ACTIVE | RMS: ${rms.toInt()} | Pack: $packetCount"
                         }
 
                         updateStatus(result)
@@ -225,8 +281,9 @@ class AccessibilityAudioService : AccessibilityService() {
         }
 
         try {
-            recordingThread?.join(500)
+            recordingThread?.join(1000)
         } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
         }
 
         try {
@@ -236,6 +293,10 @@ class AccessibilityAudioService : AccessibilityService() {
 
         recordingThread = null
     }
+
+    // =====================================
+    // AUDIO STATUS OVERLAY
+    // =====================================
 
     private fun showStatusOverlay(message: String) {
         if (statusView != null) {
@@ -280,19 +341,22 @@ class AccessibilityAudioService : AccessibilityService() {
     }
 
     private fun updateStatus(message: String) {
-        android.os.Handler(mainLooper).post {
+        mainHandler.post {
+
             statusView?.text = message
 
             try {
-                val intent = android.content.Intent(
+                val intent = Intent(
                     this,
                     FloatingTranslatorService::class.java
                 ).apply {
                     action = FloatingTranslatorService.ACTION_UPDATE
+
                     putExtra(
                         FloatingTranslatorService.EXTRA_MESSAGE,
                         "মাইক্রোফোন অডিও পরীক্ষা চলছে..."
                     )
+
                     putExtra(
                         FloatingTranslatorService.EXTRA_STATUS,
                         message
@@ -300,6 +364,7 @@ class AccessibilityAudioService : AccessibilityService() {
                 }
 
                 startService(intent)
+
             } catch (_: Exception) {
             }
         }
@@ -316,6 +381,10 @@ class AccessibilityAudioService : AccessibilityService() {
         statusView = null
     }
 
+    // =====================================
+    // ACCESSIBILITY LIFECYCLE
+    // =====================================
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // No screen content is collected.
     }
@@ -326,6 +395,7 @@ class AccessibilityAudioService : AccessibilityService() {
 
     override fun onDestroy() {
         stopAudioCapture()
+        hideTranslatorPopup()
 
         try {
             phoneListener?.let {
