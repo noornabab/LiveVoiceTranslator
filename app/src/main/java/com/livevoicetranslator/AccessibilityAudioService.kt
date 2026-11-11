@@ -40,31 +40,22 @@ class AccessibilityAudioService : AccessibilityService() {
             AudioFormat.ENCODING_PCM_16BIT
 
         private const val READ_SIZE = 2048
-
-        // RMS threshold: quiet speech may need adjustment
         private const val SPEECH_THRESHOLD = 180.0
 
-        // Silence duration before final submission
         private const val SILENCE_DURATION_MS = 1200L
-
-        // Preview interval
         private const val PREVIEW_INTERVAL_MS = 3500L
 
-        // Maximum segment size (before forced finalization)
         private const val MAX_SEGMENT_BYTES = 1_300_000
-
-        // Ignore very short audio
         private const val MIN_FINAL_BYTES = 12000
-
         private const val PRE_ROLL_CHUNKS = 8
     }
-
-    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val networkExecutor: ExecutorService =
         Executors.newSingleThreadExecutor()
 
     private val previewInFlight = AtomicBoolean(false)
+
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     @Volatile
     private var callActive = false
@@ -76,11 +67,9 @@ class AccessibilityAudioService : AccessibilityService() {
     private var audioRecord: AudioRecord? = null
 
     private var recordingThread: Thread? = null
-
     private var telephonyManager: TelephonyManager? = null
 
     private var lastFinalText = ""
-
     private var currentLanguage = "en"
 
     private val phoneListener = object : PhoneStateListener() {
@@ -97,7 +86,6 @@ class AccessibilityAudioService : AccessibilityService() {
                     if (!callActive) {
                         callActive = true
                         lastFinalText = ""
-
                         currentLanguage = getApiLanguage()
 
                         showPopup()
@@ -120,7 +108,6 @@ class AccessibilityAudioService : AccessibilityService() {
 
                         stopAudioCapture()
 
-                        // Allow final audio request time to finish
                         mainHandler.postDelayed({
                             hidePopup()
                         }, 6000)
@@ -128,7 +115,7 @@ class AccessibilityAudioService : AccessibilityService() {
                 }
 
                 TelephonyManager.CALL_STATE_RINGING -> {
-                    // Wait until the call is answered
+                    // Wait for call answer
                 }
             }
         }
@@ -142,9 +129,7 @@ class AccessibilityAudioService : AccessibilityService() {
                 Manifest.permission.READ_PHONE_STATE
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            updateStatus(
-                "Phone permission প্রয়োজন"
-            )
+            updateStatus("Phone permission প্রয়োজন")
             return
         }
 
@@ -158,9 +143,7 @@ class AccessibilityAudioService : AccessibilityService() {
                 PhoneStateListener.LISTEN_CALL_STATE
             )
         } catch (e: Exception) {
-            updateStatus(
-                "Call monitoring error: ${e.message}"
-            )
+            updateStatus("Call monitoring error: ${e.message}")
         }
     }
 
@@ -184,14 +167,13 @@ class AccessibilityAudioService : AccessibilityService() {
         }
 
         stopAudioCapture()
-
         networkExecutor.shutdown()
 
         super.onDestroy()
     }
 
     // =====================================
-    // LANGUAGE SELECTION
+    // LANGUAGE
     // =====================================
 
     private fun getApiLanguage(): String {
@@ -216,7 +198,7 @@ class AccessibilityAudioService : AccessibilityService() {
     }
 
     // =====================================
-    // POPUP CONTROL
+    // POPUP
     // =====================================
 
     private fun showPopup() {
@@ -231,9 +213,7 @@ class AccessibilityAudioService : AccessibilityService() {
         try {
             startService(intent)
         } catch (e: Exception) {
-            updateStatus(
-                "Popup error: ${e.message}"
-            )
+            updateStatus("Popup error: ${e.message}")
         }
     }
 
@@ -285,7 +265,7 @@ class AccessibilityAudioService : AccessibilityService() {
     }
 
     // =====================================
-    // AUDIO CAPTURE START
+    // START AUDIO
     // =====================================
 
     private fun startAudioCapture() {
@@ -297,18 +277,14 @@ class AccessibilityAudioService : AccessibilityService() {
                 Manifest.permission.RECORD_AUDIO
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            updateStatus(
-                "Microphone permission প্রয়োজন"
-            )
+            updateStatus("Microphone permission প্রয়োজন")
             return
         }
 
         captureRunning = true
 
         recordingThread = Thread {
-
             captureAudioLoop()
-
         }.apply {
             name = "LiveTranslatorAudio"
             start()
@@ -316,7 +292,7 @@ class AccessibilityAudioService : AccessibilityService() {
     }
 
     // =====================================
-    // AUDIO CAPTURE LOOP
+    // AUDIO LOOP
     // =====================================
 
     private fun captureAudioLoop() {
@@ -324,13 +300,10 @@ class AccessibilityAudioService : AccessibilityService() {
         var recorder: AudioRecord? = null
 
         val segment = ByteArrayOutputStream()
-
         val preRoll = ArrayDeque<ByteArray>()
 
         var inSpeech = false
-
         var lastSpeechAt = 0L
-
         var lastPreviewAt = 0L
 
         try {
@@ -342,9 +315,7 @@ class AccessibilityAudioService : AccessibilityService() {
             )
 
             if (minimumBuffer <= 0) {
-                updateStatus(
-                    "AudioRecord buffer error: $minimumBuffer"
-                )
+                updateStatus("AudioRecord buffer error: $minimumBuffer")
                 return
             }
 
@@ -361,22 +332,15 @@ class AccessibilityAudioService : AccessibilityService() {
                 bufferSize
             )
 
-            if (
-                recorder.state != AudioRecord.STATE_INITIALIZED
-            ) {
-                updateStatus(
-                    "Microphone initialize failed"
-                )
+            if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+                updateStatus("Microphone initialize failed")
                 return
             }
 
             audioRecord = recorder
-
             recorder.startRecording()
 
-            updateStatus(
-                "মাইক্রোফোন চালু। কথা শুনছি..."
-            )
+            updateStatus("মাইক্রোফোন চালু। কথা শুনছি...")
 
             val samples = ShortArray(READ_SIZE)
 
@@ -404,19 +368,15 @@ class AccessibilityAudioService : AccessibilityService() {
                 )
 
                 val now = System.currentTimeMillis()
-
-                val speechDetected =
-                    rms >= SPEECH_THRESHOLD
+                val speechDetected = rms >= SPEECH_THRESHOLD
 
                 if (speechDetected) {
 
                     if (!inSpeech) {
 
                         inSpeech = true
-
                         segment.reset()
 
-                        // Include a little audio before speech starts
                         for (previous in preRoll) {
                             segment.write(previous)
                         }
@@ -428,31 +388,23 @@ class AccessibilityAudioService : AccessibilityService() {
                     }
 
                     segment.write(chunkBytes)
-
                     lastSpeechAt = now
 
                 } else {
 
                     if (inSpeech) {
-
-                        // Keep silence at the end of the segment
                         segment.write(chunkBytes)
-
                     } else {
 
                         preRoll.addLast(chunkBytes)
 
-                        while (
-                            preRoll.size > PRE_ROLL_CHUNKS
-                        ) {
+                        while (preRoll.size > PRE_ROLL_CHUNKS) {
                             preRoll.removeFirst()
                         }
                     }
                 }
 
-                // =================================
                 // LIVE PREVIEW
-                // =================================
 
                 if (
                     inSpeech &&
@@ -460,10 +412,8 @@ class AccessibilityAudioService : AccessibilityService() {
                     segment.size() > 30000
                 ) {
 
-                    val audioSnapshot = segment.toByteArray()
-
                     sendAudioToWorker(
-                        audioSnapshot,
+                        segment.toByteArray(),
                         "preview",
                         currentLanguage
                     )
@@ -471,9 +421,7 @@ class AccessibilityAudioService : AccessibilityService() {
                     lastPreviewAt = now
                 }
 
-                // =================================
                 // FINAL AFTER SILENCE
-                // =================================
 
                 if (
                     inSpeech &&
@@ -483,7 +431,6 @@ class AccessibilityAudioService : AccessibilityService() {
                     val finalAudio = segment.toByteArray()
 
                     if (finalAudio.size >= MIN_FINAL_BYTES) {
-
                         sendAudioToWorker(
                             finalAudio,
                             "final",
@@ -492,26 +439,21 @@ class AccessibilityAudioService : AccessibilityService() {
                     }
 
                     segment.reset()
-
                     inSpeech = false
 
                     lastSpeechAt = 0L
                     lastPreviewAt = 0L
                 }
 
-                // =================================
                 // MAXIMUM SEGMENT SIZE
-                // =================================
 
                 if (
                     inSpeech &&
                     segment.size() >= MAX_SEGMENT_BYTES
                 ) {
 
-                    val finalAudio = segment.toByteArray()
-
                     sendAudioToWorker(
-                        finalAudio,
+                        segment.toByteArray(),
                         "final",
                         currentLanguage
                     )
@@ -526,16 +468,12 @@ class AccessibilityAudioService : AccessibilityService() {
         } catch (e: Exception) {
 
             if (callActive) {
-                updateStatus(
-                    "Audio error: ${e.message}"
-                )
+                updateStatus("Audio error: ${e.message}")
             }
 
         } finally {
 
-            // =================================
             // SEND REMAINING AUDIO
-            // =================================
 
             try {
 
@@ -545,7 +483,6 @@ class AccessibilityAudioService : AccessibilityService() {
                     inSpeech &&
                     remainingAudio.size >= MIN_FINAL_BYTES
                 ) {
-
                     sendAudioToWorker(
                         remainingAudio,
                         "final",
@@ -571,7 +508,7 @@ class AccessibilityAudioService : AccessibilityService() {
     }
 
     // =====================================
-    // STOP AUDIO CAPTURE
+    // STOP AUDIO
     // =====================================
 
     private fun stopAudioCapture() {
@@ -585,7 +522,7 @@ class AccessibilityAudioService : AccessibilityService() {
     }
 
     // =====================================
-    // RMS CALCULATION
+    // RMS
     // =====================================
 
     private fun calculateRms(
@@ -598,9 +535,7 @@ class AccessibilityAudioService : AccessibilityService() {
         var sum = 0.0
 
         for (i in 0 until count) {
-
             val value = samples[i].toDouble()
-
             sum += value * value
         }
 
@@ -608,7 +543,7 @@ class AccessibilityAudioService : AccessibilityService() {
     }
 
     // =====================================
-    // SHORT ARRAY TO PCM BYTES
+    // PCM CONVERSION
     // =====================================
 
     private fun shortsToBytes(
@@ -633,7 +568,7 @@ class AccessibilityAudioService : AccessibilityService() {
     }
 
     // =====================================
-    // CREATE WAV FILE
+    // WAV CREATION
     // =====================================
 
     private fun createWav(
@@ -649,7 +584,6 @@ class AccessibilityAudioService : AccessibilityService() {
         }
 
         fun writeInt(value: Int) {
-
             output.write(value and 0xff)
             output.write((value shr 8) and 0xff)
             output.write((value shr 16) and 0xff)
@@ -657,14 +591,12 @@ class AccessibilityAudioService : AccessibilityService() {
         }
 
         fun writeShort(value: Int) {
-
             output.write(value and 0xff)
             output.write((value shr 8) and 0xff)
         }
 
         writeText("RIFF")
         writeInt(36 + pcmData.size)
-
         writeText("WAVE")
         writeText("fmt ")
 
@@ -687,7 +619,7 @@ class AccessibilityAudioService : AccessibilityService() {
     }
 
     // =====================================
-    // SEND AUDIO TO CLOUDFLARE WORKER
+    // SEND TO WORKER
     // =====================================
 
     private fun sendAudioToWorker(
@@ -698,14 +630,10 @@ class AccessibilityAudioService : AccessibilityService() {
 
         if (pcmData.isEmpty()) return
 
-        // Do not queue multiple previews
         if (mode == "preview") {
 
             if (
-                !previewInFlight.compareAndSet(
-                    false,
-                    true
-                )
+                !previewInFlight.compareAndSet(false, true)
             ) {
                 return
             }
@@ -729,10 +657,8 @@ class AccessibilityAudioService : AccessibilityService() {
                 try {
 
                     connection.requestMethod = "POST"
-
                     connection.connectTimeout = 20000
                     connection.readTimeout = 60000
-
                     connection.doOutput = true
 
                     connection.setRequestProperty(
@@ -745,12 +671,11 @@ class AccessibilityAudioService : AccessibilityService() {
                         "application/json"
                     )
 
-                    connection.outputStream.use {
-                        it.write(wavData)
+                    connection.outputStream.use { stream ->
+                        stream.write(wavData)
                     }
 
-                    val responseCode =
-                        connection.responseCode
+                    val responseCode = connection.responseCode
 
                     val responseStream =
                         if (responseCode in 200..299) {
@@ -767,11 +692,10 @@ class AccessibilityAudioService : AccessibilityService() {
                     if (responseCode !in 200..299) {
 
                         val errorMessage = try {
-                            JSONObject(responseText)
-                                .optString(
-                                    "error",
-                                    "Server error $responseCode"
-                                )
+                            JSONObject(responseText).optString(
+                                "error",
+                                "Server error $responseCode"
+                            )
                         } catch (_: Exception) {
                             "Server error $responseCode"
                         }
@@ -783,99 +707,94 @@ class AccessibilityAudioService : AccessibilityService() {
                             )
                         }
 
-                        return@use
-                    }
-
-                    val result = JSONObject(responseText)
-
-                    if (!result.optBoolean("success", false)) {
-
-                        if (mode == "final") {
-                            sendPopupUpdate(
-                                result.optString(
-                                    "error",
-                                    "Translation failed"
-                                ),
-                                "TRANSLATION FAILED"
-                            )
-                        }
-
-                        return@use
-                    }
-
-                    val original =
-                        result.optString("original", "").trim()
-
-                    val bengali =
-                        result.optString("bengali", "").trim()
-
-                    if (
-                        original.isEmpty() ||
-                        bengali.isEmpty()
-                    ) {
-                        return@use
-                    }
-
-                    val message = if (language == "bn") {
-
-                        "মূল কথা: $original\n\nবাংলা: $bengali"
-
                     } else {
 
-                        "মূল কথা: $original\n\nবাংলা অনুবাদ: $bengali"
-                    }
+                        val result = JSONObject(responseText)
 
-                    if (mode == "preview") {
+                        if (!result.optBoolean("success", false)) {
 
-                        sendPopupUpdate(
-                            message,
-                            "লাইভ লেখা আপডেট হচ্ছে"
-                        )
-
-                    } else {
-
-                        if (message != lastFinalText) {
-
-                            lastFinalText = message
-
-                            val translationError =
-                                result.optString(
-                                    "translationError",
-                                    ""
-                                )
-
-                            val cleanupError =
-                                result.optString(
-                                    "cleanupError",
-                                    ""
-                                )
-
-                            val status =
-                                if (
-                                    translationError.isNotEmpty() ||
-                                    cleanupError.isNotEmpty()
-                                ) {
+                            if (mode == "final") {
+                                sendPopupUpdate(
+                                    result.optString(
+                                        "error",
+                                        "Translation failed"
+                                    ),
                                     "TRANSLATION FAILED"
-                                } else {
-                                    "কথা শনাক্ত ও অনুবাদ সম্পন্ন"
-                                }
+                                )
+                            }
 
-                            sendPopupUpdate(
-                                message,
-                                status
-                            )
+                        } else {
+
+                            val original =
+                                result.optString("original", "").trim()
+
+                            val bengali =
+                                result.optString("bengali", "").trim()
+
+                            if (
+                                original.isNotEmpty() &&
+                                bengali.isNotEmpty()
+                            ) {
+
+                                val message =
+                                    if (language == "bn") {
+                                        "মূল কথা: $original\n\nবাংলা: $bengali"
+                                    } else {
+                                        "মূল কথা: $original\n\nবাংলা অনুবাদ: $bengali"
+                                    }
+
+                                if (mode == "preview") {
+
+                                    sendPopupUpdate(
+                                        message,
+                                        "লাইভ লেখা আপডেট হচ্ছে"
+                                    )
+
+                                } else {
+
+                                    if (message != lastFinalText) {
+
+                                        lastFinalText = message
+
+                                        val translationError =
+                                            result.optString(
+                                                "translationError",
+                                                ""
+                                            )
+
+                                        val cleanupError =
+                                            result.optString(
+                                                "cleanupError",
+                                                ""
+                                            )
+
+                                        val status =
+                                            if (
+                                                translationError.isNotEmpty() ||
+                                                cleanupError.isNotEmpty()
+                                            ) {
+                                                "TRANSLATION FAILED"
+                                            } else {
+                                                "কথা শনাক্ত ও অনুবাদ সম্পন্ন"
+                                            }
+
+                                        sendPopupUpdate(
+                                            message,
+                                            status
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
 
                 } finally {
-
                     connection.disconnect()
                 }
 
             } catch (e: Exception) {
 
                 if (mode == "final") {
-
                     sendPopupUpdate(
                         "সার্ভার সংযোগ সমস্যা: ${e.message}",
                         "TRANSLATION FAILED"
