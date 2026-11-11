@@ -56,6 +56,11 @@ class FloatingTranslatorService : Service() {
         private const val MAX_HISTORY_ENTRIES = 100
     }
 
+    private data class SpeechPair(
+        val original: String,
+        val bengali: String
+    )
+
     private lateinit var windowManager: WindowManager
     private lateinit var rootView: ScrollView
     private lateinit var params: LayoutParams
@@ -69,12 +74,14 @@ class FloatingTranslatorService : Service() {
     private var minimizeButton: Button? = null
 
     private var statusView: TextView? = null
-    private var speechView: TextView? = null
     private var speechHistoryView: TextView? = null
     private var historyScrollView: ScrollView? = null
     private var englishResultView: TextView? = null
     private var contentLayout: LinearLayout? = null
     private var banglaInput: EditText? = null
+
+    private var conversationLayout: LinearLayout? = null
+    private var conversationScroll: ScrollView? = null
 
     private var speechRawMessage = ""
     private var currentOpacity = 100
@@ -118,7 +125,8 @@ class FloatingTranslatorService : Service() {
                     statusView?.text = status
                 }
 
-                if (message != null) {
+                if (message != null && message.isNotBlank()) {
+
                     speechRawMessage = message
                     updateSpeechDisplay()
 
@@ -182,72 +190,326 @@ class FloatingTranslatorService : Service() {
     }
 
     // =====================================
-    // SPEECH DISPLAY MODE
+    // PARSE ORIGINAL + BANGLA
+    // =====================================
+
+    private fun parseSpeechPair(message: String): SpeechPair {
+
+        val originalMarker = Regex(
+            "(?i)(মূল\\s*কথা|মূল\\s*বক্তব্য|original|source|english)\\s*[:：]"
+        )
+
+        val bengaliMarker = Regex(
+            "(?i)(বাংলা\\s*অনুবাদ|বাংলা|অনুবাদ|translation|translated)\\s*[:：]"
+        )
+
+        val originalMatch = originalMarker.find(message)
+        val bengaliMatch = bengaliMarker.find(message)
+
+        if (
+            originalMatch != null &&
+            bengaliMatch != null &&
+            bengaliMatch.range.first >= originalMatch.range.last
+        ) {
+
+            val original = message.substring(
+                originalMatch.range.last + 1,
+                bengaliMatch.range.first
+            ).trim()
+
+            val bengali = message.substring(
+                bengaliMatch.range.last + 1
+            ).trim()
+
+            if (original.isNotBlank() || bengali.isNotBlank()) {
+                return SpeechPair(original, bengali)
+            }
+        }
+
+        // Label না থাকলে ভাষা দেখে fallback
+        val hasBangla = Regex("[\\u0980-\\u09FF]")
+            .containsMatchIn(message)
+
+        return if (hasBangla) {
+            SpeechPair("", message.trim())
+        } else {
+            SpeechPair(message.trim(), "")
+        }
+    }
+
+    // =====================================
+    // UPDATE SMART CONVERSATION VIEW
     // =====================================
 
     private fun updateSpeechDisplay() {
 
-        val view = speechView ?: return
+        val layout = conversationLayout ?: return
 
-        if (displayMode == 1) {
-            view.text = speechRawMessage.ifBlank {
-                "কথা বললে এখানে দেখা যাবে"
+        layout.removeAllViews()
+
+        val history = loadSpeechHistory()
+
+        val items = history.toMutableList()
+
+        // Live preview final history-তে থাকলে আবার দেখাবে না
+        if (
+            speechRawMessage.isNotBlank() &&
+            history.lastOrNull() != speechRawMessage.trim()
+        ) {
+            items.add(speechRawMessage)
+        }
+
+        if (items.isEmpty()) {
+
+            val emptyView = TextView(this).apply {
+                text = "কথা বললে এখানে Original ও বাংলা অনুবাদ দেখা যাবে।"
+                textSize = 15f
+                setTextColor(Color.LTGRAY)
+                gravity = Gravity.CENTER
+                setPadding(dp(16), dp(22), dp(16), dp(22))
             }
+
+            layout.addView(emptyView)
             return
         }
 
-        view.text = extractBanglaText(speechRawMessage)
+        items.takeLast(MAX_HISTORY_ENTRIES + 1).forEachIndexed {
+                index, message ->
+
+            val isPreview =
+                index == items.lastIndex &&
+                message == speechRawMessage.trim() &&
+                history.lastOrNull() != message
+
+            addConversationCard(
+                message = message,
+                isPreview = isPreview
+            )
+        }
+
+        conversationScroll?.post {
+            conversationScroll?.fullScroll(View.FOCUS_DOWN)
+        }
     }
 
-    private fun extractBanglaText(message: String): String {
+    // =====================================
+    // CONVERSATION CARD
+    // =====================================
 
-        if (message.isBlank()) {
-            return "কথা বললে এখানে দেখা যাবে"
+    private fun addConversationCard(
+        message: String,
+        isPreview: Boolean
+    ) {
+
+        val layout = conversationLayout ?: return
+        val pair = parseSpeechPair(message)
+
+        val card = LinearLayout(this).apply {
+
+            orientation = LinearLayout.VERTICAL
+
+            setPadding(
+                dp(11),
+                dp(10),
+                dp(11),
+                dp(10)
+            )
+
+            background = roundedBackground(
+                if (isPreview) {
+                    Color.rgb(48, 62, 83)
+                } else {
+                    Color.rgb(38, 48, 65)
+                },
+                dp(12)
+            )
         }
 
-        var result = message
+        val cardHeader = LinearLayout(this).apply {
 
-        // Original / English অংশ বাদ দেওয়ার চেষ্টা
-        val originalPattern = Regex(
-            "(?is)(?:মূল কথা|মূল বক্তব্য|original|source|english)\\s*[:：]\\s*.*?(?=(?:বাংলা অনুবাদ|বাংলা|অনুবাদ|translation|translated)\\s*[:：])"
-        )
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
 
-        result = originalPattern.replace(result, "")
+        val cardTitle = TextView(this).apply {
 
-        // আলাদা Original / English লাইন বাদ
-        val lines = result.lines().filter { line ->
+            text = if (isPreview) {
+                "LIVE PREVIEW"
+            } else {
+                "CONVERSATION"
+            }
 
-            val cleanLine = line.trim()
+            textSize = 11f
+            setTextColor(
+                if (isPreview) {
+                    Color.rgb(100, 220, 170)
+                } else {
+                    Color.LTGRAY
+                }
+            )
 
-            cleanLine.isNotBlank() &&
-                !cleanLine.matches(
-                    Regex(
-                        "(?i)^\\s*(original|source|english|মূল কথা|মূল বক্তব্য)\\s*[:：]?.*$"
-                    )
+            typeface = Typeface.DEFAULT_BOLD
+
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                dp(28),
+                1f
+            )
+        }
+
+        val copyAllButton = makeButton("Copy All")
+
+        copyAllButton.setOnClickListener {
+
+            val text = buildString {
+
+                if (pair.original.isNotBlank()) {
+                    append("Original Speech:\n")
+                    append(pair.original)
+                    append("\n\n")
+                }
+
+                if (pair.bengali.isNotBlank()) {
+                    append("বাংলা অনুবাদ:\n")
+                    append(pair.bengali)
+                }
+            }
+
+            copyText(text, "Conversation")
+        }
+
+        cardHeader.addView(cardTitle)
+        cardHeader.addView(copyAllButton)
+
+        card.addView(cardHeader)
+
+        // Original Speech
+        if (displayMode == 1 && pair.original.isNotBlank()) {
+
+            val originalHeader = TextView(this).apply {
+
+                text = "ORIGINAL SPEECH"
+                textSize = 12f
+                setTextColor(Color.rgb(125, 190, 255))
+                typeface = Typeface.DEFAULT_BOLD
+
+                setPadding(0, dp(9), 0, dp(4))
+            }
+
+            val originalText = TextView(this).apply {
+
+                text = pair.original
+                textSize = 16f
+                setTextColor(Color.WHITE)
+
+                setPadding(
+                    dp(10),
+                    dp(10),
+                    dp(10),
+                    dp(10)
                 )
+
+                setLineSpacing(dp(3).toFloat(), 1f)
+
+                background = roundedBackground(
+                    Color.rgb(51, 68, 91),
+                    dp(9)
+                )
+            }
+
+            val originalCopy = makeButton("Copy Original")
+
+            originalCopy.setOnClickListener {
+                copyText(pair.original, "Original Speech")
+            }
+
+            card.addView(originalHeader)
+            card.addView(originalText)
+
+            val originalCopyRow = LinearLayout(this).apply {
+                gravity = Gravity.END
+                setPadding(0, dp(4), 0, dp(5))
+            }
+
+            originalCopyRow.addView(originalCopy)
+            card.addView(originalCopyRow)
         }
 
-        result = lines.joinToString("\n").trim()
+        // Bengali Translation
+        if (pair.bengali.isNotBlank()) {
 
-        // বাংলা অনুবাদের লেবেল পরিষ্কার
-        result = result.replace(
-            Regex("(?im)^\\s*(বাংলা অনুবাদ|বাংলা|অনুবাদ)\\s*[:：]\\s*"),
-            ""
+            val bengaliHeader = TextView(this).apply {
+
+                text = "বাংলা অনুবাদ"
+                textSize = 13f
+                setTextColor(Color.rgb(100, 230, 160))
+                typeface = Typeface.DEFAULT_BOLD
+
+                setPadding(0, dp(8), 0, dp(5))
+            }
+
+            val bengaliText = TextView(this).apply {
+
+                text = pair.bengali
+                textSize = 17f
+                setTextColor(Color.WHITE)
+
+                setPadding(
+                    dp(11),
+                    dp(11),
+                    dp(11),
+                    dp(11)
+                )
+
+                setLineSpacing(dp(4).toFloat(), 1f)
+
+                background = roundedBackground(
+                    Color.rgb(39, 79, 67),
+                    dp(9)
+                )
+            }
+
+            val bengaliCopy = makeButton("Copy বাংলা")
+
+            bengaliCopy.setOnClickListener {
+                copyText(pair.bengali, "বাংলা অনুবাদ")
+            }
+
+            card.addView(bengaliHeader)
+            card.addView(bengaliText)
+
+            val bengaliCopyRow = LinearLayout(this).apply {
+                gravity = Gravity.END
+                setPadding(0, dp(4), 0, dp(5))
+            }
+
+            bengaliCopyRow.addView(bengaliCopy)
+            card.addView(bengaliCopyRow)
+        }
+
+        if (
+            pair.original.isBlank() &&
+            pair.bengali.isBlank()
+        ) {
+
+            val fallback = TextView(this).apply {
+                text = message
+                textSize = 16f
+                setTextColor(Color.WHITE)
+                setPadding(dp(8), dp(8), dp(8), dp(8))
+            }
+
+            card.addView(fallback)
+        }
+
+        val cardParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
         )
 
-        result = result.replace(
-            Regex("(?im)^\\s*(translation|translated)\\s*[:：]\\s*"),
-            ""
-        ).trim()
+        cardParams.bottomMargin = dp(10)
 
-        val hasBangla = Regex("[\\u0980-\\u09FF]").containsMatchIn(result)
-
-        return if (hasBangla) {
-            result
-        } else {
-            // ফরম্যাট বোঝা না গেলে মূল লেখা লুকিয়ে না ফেলে দেখাবে
-            message
-        }
+        layout.addView(card, cardParams)
     }
 
     // =====================================
@@ -385,7 +647,9 @@ class FloatingTranslatorService : Service() {
                 .takeLast(MAX_HISTORY_ENTRIES)
 
             saveSpeechHistory(updatedEntries)
+
             refreshSpeechHistory()
+            updateSpeechDisplay()
         }
     }
 
@@ -441,10 +705,7 @@ class FloatingTranslatorService : Service() {
 
         rootView.addView(mainLayout)
 
-        // =====================================
         // HEADER
-        // =====================================
-
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -541,10 +802,7 @@ class FloatingTranslatorService : Service() {
 
         mainLayout.addView(contentLayout)
 
-        // =====================================
         // STATUS
-        // =====================================
-
         statusView = TextView(this).apply {
 
             text = "অনুবাদ প্রস্তুত"
@@ -556,10 +814,7 @@ class FloatingTranslatorService : Service() {
 
         contentLayout?.addView(statusView)
 
-        // =====================================
         // LANGUAGE SELECTOR
-        // =====================================
-
         val languageLabel = TextView(this).apply {
 
             text = "Speech Language"
@@ -652,10 +907,7 @@ class FloatingTranslatorService : Service() {
             )
         )
 
-        // =====================================
-        // DISPLAY MODE SETTINGS
-        // =====================================
-
+        // DISPLAY MODE
         val displayLabel = TextView(this).apply {
 
             text = "Display Mode"
@@ -726,10 +978,7 @@ class FloatingTranslatorService : Service() {
             )
         )
 
-        // =====================================
-        // OPACITY SETTINGS
-        // =====================================
-
+        // OPACITY
         val opacityHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -809,10 +1058,7 @@ class FloatingTranslatorService : Service() {
             )
         )
 
-        // =====================================
-        // CURRENT SPEECH
-        // =====================================
-
+        // SMART CONVERSATION VIEW
         val speechHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -821,7 +1067,7 @@ class FloatingTranslatorService : Service() {
 
         val speechLabel = TextView(this).apply {
 
-            text = "Live Speech"
+            text = "Smart Conversation"
             textSize = 14f
             setTextColor(Color.WHITE)
 
@@ -832,16 +1078,29 @@ class FloatingTranslatorService : Service() {
             )
         }
 
-        val copySpeechButton = makeButton("Copy")
+        val copySpeechButton = makeButton("Copy All")
 
         copySpeechButton.setOnClickListener {
-            val textToCopy = if (displayMode == 0) {
-                extractBanglaText(speechRawMessage)
+
+            val pair = parseSpeechPair(speechRawMessage)
+
+            val text = if (displayMode == 0) {
+                pair.bengali.ifBlank { speechRawMessage }
             } else {
-                speechRawMessage
+                buildString {
+                    if (pair.original.isNotBlank()) {
+                        append("Original Speech:\n")
+                        append(pair.original)
+                        append("\n\n")
+                    }
+                    if (pair.bengali.isNotBlank()) {
+                        append("বাংলা অনুবাদ:\n")
+                        append(pair.bengali)
+                    }
+                }
             }
 
-            copyText(textToCopy, "Live Speech")
+            copyText(text, "Smart Conversation")
         }
 
         speechHeader.addView(speechLabel)
@@ -849,34 +1108,36 @@ class FloatingTranslatorService : Service() {
 
         contentLayout?.addView(speechHeader)
 
-        speechView = TextView(this).apply {
+        conversationScroll = ScrollView(this).apply {
 
-            text = "কথা বললে এখানে দেখা যাবে"
-            textSize = 17f
-            setTextColor(Color.WHITE)
-
-            setPadding(dp(12), dp(14), dp(12), dp(14))
+            isFillViewport = false
+            isVerticalScrollBarEnabled = true
 
             background = roundedBackground(
-                Color.rgb(45, 52, 68),
+                Color.rgb(31, 38, 52),
                 dp(12)
             )
 
-            minHeight = dp(65)
+            setPadding(dp(7), dp(7), dp(7), dp(7))
         }
 
+        conversationLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        conversationScroll?.addView(conversationLayout)
+
         contentLayout?.addView(
-            speechView,
+            conversationScroll,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
+                dp(260)
             )
         )
 
-        // =====================================
-        // HISTORY
-        // =====================================
+        updateSpeechDisplay()
 
+        // HISTORY
         val historyLabel = TextView(this).apply {
 
             text = "কথোপকথন / TRANSLATION HISTORY"
@@ -925,10 +1186,7 @@ class FloatingTranslatorService : Service() {
 
         refreshSpeechHistory()
 
-        // =====================================
         // BANGLA INPUT
-        // =====================================
-
         val inputLabel = TextView(this).apply {
 
             text = "বাংলায় লিখুন → English Translation"
@@ -966,10 +1224,7 @@ class FloatingTranslatorService : Service() {
             )
         )
 
-        // =====================================
         // ENGLISH TRANSLATION
-        // =====================================
-
         val englishHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1027,10 +1282,7 @@ class FloatingTranslatorService : Service() {
 
         setupAutomaticTranslation()
 
-        // =====================================
         // WINDOW PARAMETERS
-        // =====================================
-
         params = LayoutParams(
             (resources.displayMetrics.widthPixels * 0.94).toInt(),
             minimizedHeight,
