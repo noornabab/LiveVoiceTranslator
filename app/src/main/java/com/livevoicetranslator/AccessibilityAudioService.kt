@@ -21,10 +21,10 @@ import android.view.Gravity
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.widget.TextView
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
-import java.util.Locale
 import java.util.concurrent.Executors
 
 class AccessibilityAudioService : AccessibilityService() {
@@ -36,13 +36,10 @@ class AccessibilityAudioService : AccessibilityService() {
 
     private var telephonyManager: TelephonyManager? = null
     private var phoneListener: PhoneStateListener? = null
-
     private var speechRecognizer: SpeechRecognizer? = null
 
     @Volatile
     private var callActive = false
-
-    private var recognitionReady = false
 
     private var windowManager: WindowManager? = null
     private var statusView: TextView? = null
@@ -54,10 +51,6 @@ class AccessibilityAudioService : AccessibilityService() {
 
     private var restartRunnable: Runnable? = null
 
-    // =====================================
-    // SERVICE CONNECTED
-    // =====================================
-
     override fun onServiceConnected() {
         super.onServiceConnected()
 
@@ -65,18 +58,13 @@ class AccessibilityAudioService : AccessibilityService() {
             getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
         showStatusOverlay("Live Voice Translator প্রস্তুত")
-
         startPhoneMonitoring()
     }
 
-    // =====================================
     // PHONE MONITORING
-    // =====================================
 
     private fun startPhoneMonitoring() {
-
         try {
-
             if (
                 checkSelfPermission(Manifest.permission.READ_PHONE_STATE) !=
                 PackageManager.PERMISSION_GRANTED
@@ -99,33 +87,24 @@ class AccessibilityAudioService : AccessibilityService() {
                     when (state) {
 
                         TelephonyManager.CALL_STATE_OFFHOOK -> {
-
                             if (callActive) return
 
                             callActive = true
-
                             showStatusOverlay("কল সংযুক্ত")
-
                             showTranslatorPopup()
-
                             startSpeechRecognition()
                         }
 
                         TelephonyManager.CALL_STATE_IDLE -> {
-
                             if (!callActive) return
 
                             callActive = false
-
                             stopSpeechRecognition()
-
                             hideTranslatorPopup()
-
                             updateStatus("কল শেষ")
                         }
 
                         TelephonyManager.CALL_STATE_RINGING -> {
-
                             updateStatus("ইনকামিং কল")
                         }
                     }
@@ -137,34 +116,24 @@ class AccessibilityAudioService : AccessibilityService() {
                 PhoneStateListener.LISTEN_CALL_STATE
             )
 
-            // Service চালুর সময় কল আগে থেকেই চললে
-
             if (
                 telephonyManager?.callState ==
                 TelephonyManager.CALL_STATE_OFFHOOK
             ) {
-
                 callActive = true
-
                 showTranslatorPopup()
-
                 startSpeechRecognition()
             }
 
         } catch (e: Exception) {
-
             updateStatus("PHONE ERROR: ${e.message}")
         }
     }
 
-    // =====================================
     // POPUP CONTROL
-    // =====================================
 
     private fun showTranslatorPopup() {
-
         try {
-
             val intent = Intent(
                 this,
                 FloatingTranslatorService::class.java
@@ -175,15 +144,12 @@ class AccessibilityAudioService : AccessibilityService() {
             startService(intent)
 
         } catch (e: Exception) {
-
             updateStatus("POPUP ERROR: ${e.message}")
         }
     }
 
     private fun hideTranslatorPopup() {
-
         try {
-
             val intent = Intent(
                 this,
                 FloatingTranslatorService::class.java
@@ -197,12 +163,9 @@ class AccessibilityAudioService : AccessibilityService() {
         }
     }
 
-    // =====================================
-    // GET SELECTED LANGUAGE
-    // =====================================
+    // SELECTED LANGUAGE
 
     private fun getSelectedLanguage(): String {
-
         val preferences = getSharedPreferences(
             PREFS_NAME,
             MODE_PRIVATE
@@ -214,12 +177,9 @@ class AccessibilityAudioService : AccessibilityService() {
         ) ?: "bn-BD"
     }
 
-    // =====================================
-    // SPEECH RECOGNITION START
-    // =====================================
+    // SPEECH RECOGNITION
 
     private fun startSpeechRecognition() {
-
         if (!callActive) return
 
         if (
@@ -231,95 +191,65 @@ class AccessibilityAudioService : AccessibilityService() {
         }
 
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-
-            updateStatus(
-                "Speech Recognition service পাওয়া যায়নি"
-            )
-
+            updateStatus("Speech Recognition service পাওয়া যায়নি")
             return
         }
 
         try {
-
             stopSpeechRecognition()
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
-            ) {
-
-                speechRecognizer =
+            speechRecognizer =
+                if (
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
+                ) {
                     SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
-
-            } else {
-
-                speechRecognizer =
+                } else {
                     SpeechRecognizer.createSpeechRecognizer(this)
-            }
+                }
 
             speechRecognizer?.setRecognitionListener(
                 recognitionListener
             )
 
             updateStatus("Speech Recognition চালু হচ্ছে...")
-
             startListening()
 
         } catch (e: Exception) {
-
             updateStatus("SPEECH ERROR: ${e.message}")
+            scheduleRecognitionRestart(1500)
         }
     }
 
-    // =====================================
     // RECOGNITION LISTENER
-    // =====================================
 
     private val recognitionListener =
         object : RecognitionListener {
 
             override fun onReadyForSpeech(params: Bundle?) {
-
-                recognitionReady = true
-
-                updateStatus(
-                    "কথা শোনার জন্য প্রস্তুত"
-                )
+                updateStatus("কথা শোনার জন্য প্রস্তুত")
             }
 
             override fun onBeginningOfSpeech() {
-
                 updateStatus("কথা শনাক্ত হচ্ছে...")
             }
 
             override fun onRmsChanged(rmsdB: Float) {
-                // Audio level callback
             }
 
             override fun onBufferReceived(buffer: ByteArray?) {
             }
 
             override fun onEndOfSpeech() {
-
-                recognitionReady = false
-
                 updateStatus("কথা প্রক্রিয়াকরণ হচ্ছে...")
             }
 
             override fun onError(error: Int) {
-
-                recognitionReady = false
-
-                updateStatus(
-                    "Speech Recognition Error: $error"
-                )
-
+                updateStatus("Speech Recognition Error: $error")
                 scheduleRecognitionRestart(1200)
             }
 
             override fun onResults(results: Bundle?) {
-
-                recognitionReady = false
-
                 val matches = results?.getStringArrayList(
                     SpeechRecognizer.RESULTS_RECOGNITION
                 )
@@ -328,7 +258,6 @@ class AccessibilityAudioService : AccessibilityService() {
                     matches?.firstOrNull()?.trim().orEmpty()
 
                 if (recognizedText.isNotBlank()) {
-
                     processRecognizedSpeech(recognizedText)
                 }
 
@@ -336,7 +265,6 @@ class AccessibilityAudioService : AccessibilityService() {
             }
 
             override fun onPartialResults(partialResults: Bundle?) {
-
                 val matches = partialResults?.getStringArrayList(
                     SpeechRecognizer.RESULTS_RECOGNITION
                 )
@@ -345,7 +273,6 @@ class AccessibilityAudioService : AccessibilityService() {
                     matches?.firstOrNull()?.trim().orEmpty()
 
                 if (partialText.isNotBlank()) {
-
                     sendPopupUpdate(
                         "মূল কথা: $partialText",
                         "কথা শনাক্ত হচ্ছে..."
@@ -360,18 +287,14 @@ class AccessibilityAudioService : AccessibilityService() {
             }
         }
 
-    // =====================================
     // START LISTENING
-    // =====================================
 
     private fun startListening() {
-
         if (!callActive) return
 
         val recognizer = speechRecognizer ?: return
 
         try {
-
             val language = getSelectedLanguage()
 
             val intent = Intent(
@@ -417,67 +340,43 @@ class AccessibilityAudioService : AccessibilityService() {
             recognizer.startListening(intent)
 
         } catch (e: Exception) {
-
-            updateStatus(
-                "LISTENING ERROR: ${e.message}"
-            )
-
+            updateStatus("LISTENING ERROR: ${e.message}")
             scheduleRecognitionRestart(1500)
         }
     }
 
-    // =====================================
     // RESTART RECOGNITION
-    // =====================================
 
     private fun scheduleRecognitionRestart(delay: Long) {
-
         restartRunnable?.let {
             mainHandler.removeCallbacks(it)
         }
 
         val runnable = Runnable {
-
             if (callActive) {
-
                 try {
-
                     speechRecognizer?.cancel()
-
                     startListening()
-
                 } catch (e: Exception) {
-
-                    updateStatus(
-                        "RESTART ERROR: ${e.message}"
-                    )
+                    updateStatus("RESTART ERROR: ${e.message}")
                 }
             }
         }
 
         restartRunnable = runnable
-
-        mainHandler.postDelayed(
-            runnable,
-            delay
-        )
+        mainHandler.postDelayed(runnable, delay)
     }
 
-    // =====================================
-    // PROCESS RECOGNIZED SPEECH
-    // =====================================
+    // PROCESS SPEECH
 
     private fun processRecognizedSpeech(text: String) {
-
         val language = getSelectedLanguage()
 
         if (language == "bn-BD") {
-
             sendPopupUpdate(
                 "মূল কথা: $text\n\nবাংলা: $text",
                 "বাংলা কথা শনাক্ত হয়েছে"
             )
-
             return
         }
 
@@ -489,107 +388,98 @@ class AccessibilityAudioService : AccessibilityService() {
         translateToBangla(text, language)
     }
 
-    // =====================================
     // TRANSLATE TO BANGLA
-    // =====================================
 
     private fun translateToBangla(
         originalText: String,
         sourceLanguage: String
     ) {
+        try {
+            translationExecutor.execute {
 
-        translationExecutor.execute {
+                var connection: HttpURLConnection? = null
 
-            var connection: HttpURLConnection? = null
+                try {
+                    val sourceCode = when (sourceLanguage) {
+                        "en-US" -> "en"
+                        "ar-SA" -> "ar"
+                        "hi-IN" -> "hi"
+                        else -> "en"
+                    }
 
-            try {
-
-                val sourceCode = when (sourceLanguage) {
-                    "en-US" -> "en"
-                    "ar-SA" -> "ar"
-                    "hi-IN" -> "hi"
-                    else -> "en"
-                }
-
-                val encoded = URLEncoder.encode(
-                    originalText,
-                    "UTF-8"
-                )
-
-                val url = URL(
-                    "https://api.mymemory.translated.net/get" +
-                        "?q=$encoded&langpair=$sourceCode|bn"
-                )
-
-                connection =
-                    url.openConnection() as HttpURLConnection
-
-                connection.requestMethod = "GET"
-
-                connection.connectTimeout = 15000
-                connection.readTimeout = 15000
-
-                val responseCode = connection.responseCode
-
-                if (responseCode != 200) {
-                    throw Exception("HTTP $responseCode")
-                }
-
-                val response = connection.inputStream
-                    .bufferedReader()
-                    .use { it.readText() }
-
-                val translated = JSONObject(response)
-                    .getJSONObject("responseData")
-                    .optString("translatedText", "")
-                    .trim()
-
-                if (translated.isBlank()) {
-                    throw Exception("Empty translation")
-                }
-
-                mainHandler.post {
-
-                    if (!callActive) return@post
-
-                    sendPopupUpdate(
-                        "মূল কথা: $originalText\n\nবাংলা অনুবাদ: $translated",
-                        "বাংলা অনুবাদ সম্পন্ন"
+                    val encoded = URLEncoder.encode(
+                        originalText,
+                        "UTF-8"
                     )
-                }
 
-            } catch (e: Exception) {
-
-                mainHandler.post {
-
-                    if (!callActive) return@post
-
-                    sendPopupUpdate(
-                        "মূল কথা: $originalText\n\nবাংলা অনুবাদ পাওয়া যায়নি।",
-                        "TRANSLATION FAILED"
+                    val url = URL(
+                        "https://api.mymemory.translated.net/get" +
+                            "?q=$encoded&langpair=$sourceCode|bn"
                     )
+
+                    connection =
+                        url.openConnection() as HttpURLConnection
+
+                    connection.requestMethod = "GET"
+                    connection.connectTimeout = 15000
+                    connection.readTimeout = 15000
+
+                    val responseCode = connection.responseCode
+
+                    if (responseCode != 200) {
+                        throw Exception("HTTP $responseCode")
+                    }
+
+                    val response = connection.inputStream
+                        .bufferedReader()
+                        .use { it.readText() }
+
+                    val translated = JSONObject(response)
+                        .getJSONObject("responseData")
+                        .optString("translatedText", "")
+                        .trim()
+
+                    if (translated.isBlank()) {
+                        throw Exception("Empty translation")
+                    }
+
+                    mainHandler.post {
+                        if (!callActive) return@post
+
+                        sendPopupUpdate(
+                            "মূল কথা: $originalText\n\nবাংলা অনুবাদ: $translated",
+                            "বাংলা অনুবাদ সম্পন্ন"
+                        )
+                    }
+
+                } catch (e: Exception) {
+                    mainHandler.post {
+                        if (!callActive) return@post
+
+                        sendPopupUpdate(
+                            "মূল কথা: $originalText\n\nবাংলা অনুবাদ পাওয়া যায়নি।",
+                            "TRANSLATION FAILED"
+                        )
+                    }
+
+                } finally {
+                    connection?.disconnect()
                 }
-
-            } finally {
-
-                connection?.disconnect()
             }
+        } catch (e: Exception) {
+            updateStatus("TRANSLATION QUEUE ERROR: ${e.message}")
         }
     }
 
-    // =====================================
     // UPDATE POPUP
-    // =====================================
 
     private fun sendPopupUpdate(
         message: String,
         status: String
     ) {
-
         if (!callActive) return
 
         try {
-
             val intent = Intent(
                 this,
                 FloatingTranslatorService::class.java
@@ -611,85 +501,57 @@ class AccessibilityAudioService : AccessibilityService() {
             startService(intent)
 
         } catch (e: Exception) {
-
-            updateStatus(
-                "POPUP UPDATE ERROR: ${e.message}"
-            )
+            updateStatus("POPUP UPDATE ERROR: ${e.message}")
         }
     }
 
-    // =====================================
     // STATUS OVERLAY
-    // =====================================
 
     private fun showStatusOverlay(message: String) {
-
         if (statusView != null) {
             updateStatus(message)
             return
         }
 
         try {
-
             val view = TextView(this).apply {
-
                 text = message
                 textSize = 12f
-
                 setTextColor(Color.WHITE)
-
-                setBackgroundColor(
-                    Color.rgb(35, 75, 110)
-                )
-
+                setBackgroundColor(Color.rgb(35, 75, 110))
                 setPadding(14, 9, 14, 9)
             }
 
             val params = WindowManager.LayoutParams(
-
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
-
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
                 } else {
                     @Suppress("DEPRECATION")
                     WindowManager.LayoutParams.TYPE_PHONE
                 },
-
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-
                 PixelFormat.TRANSLUCENT
-
             ).apply {
-
                 gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
                 y = 45
             }
 
             windowManager?.addView(view, params)
-
             statusView = view
 
         } catch (e: Exception) {
-
-            updateStatus(
-                "OVERLAY ERROR: ${e.message}"
-            )
+            updateStatus("OVERLAY ERROR: ${e.message}")
         }
     }
 
     private fun updateStatus(message: String) {
-
         mainHandler.post {
-
             statusView?.text = message
 
-            // Popup-এর Live Speech-এ Status-কে
-            // মূল কথার জায়গায় পাঠানো হবে না।
             try {
-
                 val intent = Intent(
                     this,
                     FloatingTranslatorService::class.java
@@ -710,19 +572,14 @@ class AccessibilityAudioService : AccessibilityService() {
         }
     }
 
-    // =====================================
     // STOP RECOGNITION
-    // =====================================
 
     private fun stopSpeechRecognition() {
-
         restartRunnable?.let {
             mainHandler.removeCallbacks(it)
         }
 
         restartRunnable = null
-
-        recognitionReady = false
 
         try {
             speechRecognizer?.cancel()
@@ -737,62 +594,47 @@ class AccessibilityAudioService : AccessibilityService() {
         speechRecognizer = null
     }
 
-    // =====================================
-    // REMOVE STATUS OVERLAY
-    // =====================================
+    // REMOVE OVERLAY
 
     private fun removeStatusOverlay() {
-
         try {
-
             statusView?.let {
                 windowManager?.removeView(it)
             }
-
         } catch (_: Exception) {
         }
 
         statusView = null
     }
 
-    // =====================================
     // ACCESSIBILITY LIFECYCLE
-    // =====================================
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // No screen content is collected.
     }
 
     override fun onInterrupt() {
-
         callActive = false
-
         stopSpeechRecognition()
     }
 
     override fun onDestroy() {
-
         callActive = false
 
         stopSpeechRecognition()
-
         hideTranslatorPopup()
 
         try {
-
             phoneListener?.let {
-
                 telephonyManager?.listen(
                     it,
                     PhoneStateListener.LISTEN_NONE
                 )
             }
-
         } catch (_: Exception) {
         }
 
         removeStatusOverlay()
-
         translationExecutor.shutdownNow()
 
         super.onDestroy()
