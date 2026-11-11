@@ -51,6 +51,8 @@ class AccessibilityAudioService : AccessibilityService() {
 
     private var restartRunnable: Runnable? = null
 
+    // SERVICE CONNECTED
+
     override fun onServiceConnected() {
         super.onServiceConnected()
 
@@ -90,6 +92,7 @@ class AccessibilityAudioService : AccessibilityService() {
                             if (callActive) return
 
                             callActive = true
+
                             showStatusOverlay("কল সংযুক্ত")
                             showTranslatorPopup()
                             startSpeechRecognition()
@@ -99,6 +102,7 @@ class AccessibilityAudioService : AccessibilityService() {
                             if (!callActive) return
 
                             callActive = false
+
                             stopSpeechRecognition()
                             hideTranslatorPopup()
                             updateStatus("কল শেষ")
@@ -245,8 +249,51 @@ class AccessibilityAudioService : AccessibilityService() {
             }
 
             override fun onError(error: Int) {
-                updateStatus("Speech Recognition Error: $error")
-                scheduleRecognitionRestart(1200)
+                val errorMessage = when (error) {
+                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
+                        "NETWORK TIMEOUT"
+
+                    SpeechRecognizer.ERROR_NETWORK ->
+                        "NETWORK ERROR"
+
+                    SpeechRecognizer.ERROR_AUDIO ->
+                        "AUDIO ERROR"
+
+                    SpeechRecognizer.ERROR_SERVER ->
+                        "SERVER ERROR"
+
+                    SpeechRecognizer.ERROR_CLIENT ->
+                        "CLIENT ERROR"
+
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
+                        "SPEECH TIMEOUT"
+
+                    SpeechRecognizer.ERROR_NO_MATCH ->
+                        "NO SPEECH MATCH"
+
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY ->
+                        "RECOGNIZER BUSY"
+
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
+                        "INSUFFICIENT PERMISSIONS"
+
+                    SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ->
+                        "LANGUAGE NOT SUPPORTED"
+
+                    SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ->
+                        "LANGUAGE MODEL UNAVAILABLE"
+
+                    SpeechRecognizer.ERROR_SERVER_DISCONNECTED ->
+                        "SERVER DISCONNECTED"
+
+                    else -> "UNKNOWN ERROR"
+                }
+
+                updateStatus(
+                    "Speech Error $error: $errorMessage"
+                )
+
+                scheduleRecognitionRestart(2000)
             }
 
             override fun onResults(results: Bundle?) {
@@ -261,7 +308,7 @@ class AccessibilityAudioService : AccessibilityService() {
                     processRecognizedSpeech(recognizedText)
                 }
 
-                scheduleRecognitionRestart(600)
+                scheduleRecognitionRestart(800)
             }
 
             override fun onPartialResults(partialResults: Bundle?) {
@@ -295,7 +342,13 @@ class AccessibilityAudioService : AccessibilityService() {
         val recognizer = speechRecognizer ?: return
 
         try {
-            val language = getSelectedLanguage()
+            // English নির্বাচন করলে Recognition-এর জন্য en-IN ব্যবহার
+            val language = when (getSelectedLanguage()) {
+                "en-US" -> "en-IN"
+                "ar-SA" -> "ar-SA"
+                "hi-IN" -> "hi-IN"
+                else -> "bn-BD"
+            }
 
             val intent = Intent(
                 RecognizerIntent.ACTION_RECOGNIZE_SPEECH
@@ -341,7 +394,7 @@ class AccessibilityAudioService : AccessibilityService() {
 
         } catch (e: Exception) {
             updateStatus("LISTENING ERROR: ${e.message}")
-            scheduleRecognitionRestart(1500)
+            scheduleRecognitionRestart(2000)
         }
     }
 
@@ -359,12 +412,17 @@ class AccessibilityAudioService : AccessibilityService() {
                     startListening()
                 } catch (e: Exception) {
                     updateStatus("RESTART ERROR: ${e.message}")
+                    scheduleRecognitionRestart(2500)
                 }
             }
         }
 
         restartRunnable = runnable
-        mainHandler.postDelayed(runnable, delay)
+
+        mainHandler.postDelayed(
+            runnable,
+            delay
+        )
     }
 
     // PROCESS SPEECH
