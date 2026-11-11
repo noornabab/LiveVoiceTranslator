@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <string name="app_name">Live Voice Translator</string>
+
+    <string name="accessibility_service_description">কলের সময় মাইক্রোফোন অডিও পরীক্ষা করার জন্য</string>
+
+</resources>
