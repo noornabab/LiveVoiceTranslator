@@ -18,8 +18,6 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.WindowManager.LayoutParams
-import android.view.inputmethod.InputMethodManager
-import android.content.Context
 import android.view.inputmethod.EditorInfo
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
@@ -29,6 +27,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -47,6 +46,9 @@ class FloatingTranslatorService : Service() {
 
         private const val PREFS_NAME = "LiveVoiceSettings"
         private const val PREF_LANGUAGE = "speech_language"
+
+        private const val HISTORY_KEY = "speech_history"
+        private const val MAX_HISTORY_ENTRIES = 100
     }
 
     private lateinit var windowManager: WindowManager
@@ -109,6 +111,7 @@ class FloatingTranslatorService : Service() {
                 }
 
                 if (message != null) {
+
                     speechView?.text = message
 
                     if (isFinalSpeech(status)) {
@@ -138,14 +141,110 @@ class FloatingTranslatorService : Service() {
         }
     }
 
+    // =====================================
+    // FINAL SPEECH STATUS
+    // =====================================
+
     private fun isFinalSpeech(status: String?): Boolean {
-        return status == "বাংলা অনুবাদ সম্পন্ন" ||
+
+        return status == "কথা শনাক্ত ও অনুবাদ সম্পন্ন" ||
+            status == "বাংলা অনুবাদ সম্পন্ন" ||
             status == "বাংলা কথা শনাক্ত হয়েছে" ||
             status == "TRANSLATION FAILED"
     }
 
     // =====================================
-    // SPEECH HISTORY
+    // LOAD SAVED HISTORY
+    // =====================================
+
+    private fun loadSpeechHistory(): List<String> {
+
+        return try {
+
+            val preferences = getSharedPreferences(
+                PREFS_NAME,
+                MODE_PRIVATE
+            )
+
+            val saved = preferences.getString(
+                HISTORY_KEY,
+                "[]"
+            ) ?: "[]"
+
+            val jsonArray = JSONArray(saved)
+            val result = mutableListOf<String>()
+
+            for (i in 0 until jsonArray.length()) {
+
+                val item = jsonArray.optString(i, "").trim()
+
+                if (item.isNotBlank()) {
+                    result.add(item)
+                }
+            }
+
+            result
+
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    // =====================================
+    // SAVE HISTORY
+    // =====================================
+
+    private fun saveSpeechHistory(entries: List<String>) {
+
+        try {
+
+            val jsonArray = JSONArray()
+
+            entries.takeLast(MAX_HISTORY_ENTRIES).forEach {
+                jsonArray.put(it)
+            }
+
+            getSharedPreferences(
+                PREFS_NAME,
+                MODE_PRIVATE
+            ).edit()
+                .putString(HISTORY_KEY, jsonArray.toString())
+                .apply()
+
+        } catch (_: Exception) {
+        }
+    }
+
+    // =====================================
+    // DISPLAY HISTORY
+    // =====================================
+
+    private fun refreshSpeechHistory() {
+
+        val historyView = speechHistoryView ?: return
+
+        val entries = loadSpeechHistory()
+
+        historyView.text = if (entries.isEmpty()) {
+
+            "এখনো কোনো কথা শনাক্ত হয়নি।"
+
+        } else {
+
+            entries.joinToString(
+                "\n\n────────────────\n\n"
+            )
+        }
+
+        historyScrollView?.post {
+            historyScrollView?.fullScroll(View.FOCUS_DOWN)
+        }
+
+        lastHistoryEntry = entries.lastOrNull() ?: ""
+    }
+
+    // =====================================
+    // APPEND SPEECH HISTORY
     // =====================================
 
     private fun appendSpeechHistory(message: String) {
@@ -153,25 +252,24 @@ class FloatingTranslatorService : Service() {
         val cleanMessage = message.trim()
 
         if (cleanMessage.isBlank()) return
-        if (cleanMessage == lastHistoryEntry) return
-
-        lastHistoryEntry = cleanMessage
 
         mainHandler.post {
 
-            val history = speechHistoryView ?: return@post
-            val existing = history.text.toString()
+            val entries = loadSpeechHistory()
 
-            history.text =
-                if (existing == "এখনো কোনো কথা শনাক্ত হয়নি।") {
-                    cleanMessage
-                } else {
-                    "$existing\n\n────────────────\n\n$cleanMessage"
-                }
-
-            historyScrollView?.post {
-                historyScrollView?.fullScroll(View.FOCUS_DOWN)
+            // পরপর একই ফলাফল এলে আবার যোগ করবে না
+            if (entries.lastOrNull() == cleanMessage) {
+                return@post
             }
+
+            val updatedEntries = (entries + cleanMessage)
+                .takeLast(MAX_HISTORY_ENTRIES)
+
+            saveSpeechHistory(updatedEntries)
+
+            lastHistoryEntry = cleanMessage
+
+            refreshSpeechHistory()
         }
     }
 
@@ -184,7 +282,6 @@ class FloatingTranslatorService : Service() {
         if (popupVisible) return
 
         minimized = true
-        lastHistoryEntry = ""
 
         val screenHeight =
             resources.displayMetrics.heightPixels
@@ -517,6 +614,9 @@ class FloatingTranslatorService : Service() {
             )
         )
 
+        // আগের সংরক্ষিত History দেখাবে
+        refreshSpeechHistory()
+
         // =====================================
         // BANGLA INPUT
         // =====================================
@@ -617,7 +717,6 @@ class FloatingTranslatorService : Service() {
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
 
-        // প্রথমে শুধু ছোট বার দেখাবে
         contentLayout?.visibility = View.GONE
 
         try {
@@ -625,7 +724,7 @@ class FloatingTranslatorService : Service() {
             windowManager.addView(rootView, params)
             popupVisible = true
 
-        } catch (e: Exception) {
+        } catch (_: Exception) {
 
             popupVisible = false
             stopSelf()
@@ -750,7 +849,7 @@ class FloatingTranslatorService : Service() {
                     }
                 }
 
-            } catch (e: Exception) {
+            } catch (_: Exception) {
 
                 mainHandler.post {
 
@@ -786,7 +885,6 @@ class FloatingTranslatorService : Service() {
 
             params.height = minimizedHeight
 
-            // ছোট অবস্থায় Keyboard focus লাগবে না
             params.flags =
                 params.flags or LayoutParams.FLAG_NOT_FOCUSABLE
 
@@ -798,7 +896,6 @@ class FloatingTranslatorService : Service() {
 
             params.height = expandedHeight
 
-            // Expand অবস্থায় EditText ও Keyboard কাজ করবে
             params.flags =
                 params.flags and LayoutParams.FLAG_NOT_FOCUSABLE.inv()
 
@@ -806,9 +903,7 @@ class FloatingTranslatorService : Service() {
         }
 
         try {
-
             windowManager.updateViewLayout(rootView, params)
-
         } catch (_: Exception) {
         }
     }
