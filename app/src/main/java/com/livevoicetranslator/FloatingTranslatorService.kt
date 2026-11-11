@@ -3,6 +3,8 @@ package com.livevoicetranslator
 
 import android.app.Service
 import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
@@ -25,6 +27,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import org.json.JSONArray
@@ -46,6 +49,8 @@ class FloatingTranslatorService : Service() {
 
         private const val PREFS_NAME = "LiveVoiceSettings"
         private const val PREF_LANGUAGE = "speech_language"
+        private const val PREF_OPACITY = "popup_opacity"
+        private const val PREF_DISPLAY_MODE = "speech_display_mode"
 
         private const val HISTORY_KEY = "speech_history"
         private const val MAX_HISTORY_ENTRIES = 100
@@ -71,6 +76,10 @@ class FloatingTranslatorService : Service() {
     private var contentLayout: LinearLayout? = null
     private var banglaInput: EditText? = null
 
+    private var speechRawMessage = ""
+    private var currentOpacity = 100
+    private var displayMode = 1
+
     private var dragX = 0
     private var dragY = 0
 
@@ -79,7 +88,6 @@ class FloatingTranslatorService : Service() {
 
     private var translationRunnable: Runnable? = null
     private var translationRequestId = 0
-    private var lastHistoryEntry = ""
 
     override fun onCreate() {
         super.onCreate()
@@ -111,8 +119,8 @@ class FloatingTranslatorService : Service() {
                 }
 
                 if (message != null) {
-
-                    speechView?.text = message
+                    speechRawMessage = message
+                    updateSpeechDisplay()
 
                     if (isFinalSpeech(status)) {
                         appendSpeechHistory(message)
@@ -141,6 +149,26 @@ class FloatingTranslatorService : Service() {
         }
     }
 
+    private fun makeButton(
+        label: String,
+        color: Int = Color.WHITE
+    ): Button {
+
+        return Button(this).apply {
+            text = label
+            textSize = 12f
+            setTextColor(color)
+            isAllCaps = false
+            minWidth = dp(65)
+            minHeight = dp(38)
+            setPadding(dp(8), 0, dp(8), 0)
+            background = roundedBackground(
+                Color.rgb(55, 68, 88),
+                dp(8)
+            )
+        }
+    }
+
     // =====================================
     // FINAL SPEECH STATUS
     // =====================================
@@ -151,6 +179,104 @@ class FloatingTranslatorService : Service() {
             status == "বাংলা অনুবাদ সম্পন্ন" ||
             status == "বাংলা কথা শনাক্ত হয়েছে" ||
             status == "TRANSLATION FAILED"
+    }
+
+    // =====================================
+    // SPEECH DISPLAY MODE
+    // =====================================
+
+    private fun updateSpeechDisplay() {
+
+        val view = speechView ?: return
+
+        if (displayMode == 1) {
+            view.text = speechRawMessage.ifBlank {
+                "কথা বললে এখানে দেখা যাবে"
+            }
+            return
+        }
+
+        view.text = extractBanglaText(speechRawMessage)
+    }
+
+    private fun extractBanglaText(message: String): String {
+
+        if (message.isBlank()) {
+            return "কথা বললে এখানে দেখা যাবে"
+        }
+
+        var result = message
+
+        // Original / English অংশ বাদ দেওয়ার চেষ্টা
+        val originalPattern = Regex(
+            "(?is)(?:মূল কথা|মূল বক্তব্য|original|source|english)\\s*[:：]\\s*.*?(?=(?:বাংলা অনুবাদ|বাংলা|অনুবাদ|translation|translated)\\s*[:：])"
+        )
+
+        result = originalPattern.replace(result, "")
+
+        // আলাদা Original / English লাইন বাদ
+        val lines = result.lines().filter { line ->
+
+            val cleanLine = line.trim()
+
+            cleanLine.isNotBlank() &&
+                !cleanLine.matches(
+                    Regex(
+                        "(?i)^\\s*(original|source|english|মূল কথা|মূল বক্তব্য)\\s*[:：]?.*$"
+                    )
+                )
+        }
+
+        result = lines.joinToString("\n").trim()
+
+        // বাংলা অনুবাদের লেবেল পরিষ্কার
+        result = result.replace(
+            Regex("(?im)^\\s*(বাংলা অনুবাদ|বাংলা|অনুবাদ)\\s*[:：]\\s*"),
+            ""
+        )
+
+        result = result.replace(
+            Regex("(?im)^\\s*(translation|translated)\\s*[:：]\\s*"),
+            ""
+        ).trim()
+
+        val hasBangla = Regex("[\\u0980-\\u09FF]").containsMatchIn(result)
+
+        return if (hasBangla) {
+            result
+        } else {
+            // ফরম্যাট বোঝা না গেলে মূল লেখা লুকিয়ে না ফেলে দেখাবে
+            message
+        }
+    }
+
+    // =====================================
+    // COPY TEXT
+    // =====================================
+
+    private fun copyText(text: String, label: String) {
+
+        if (text.isBlank()) {
+            statusView?.text = "কপি করার মতো লেখা নেই"
+            return
+        }
+
+        try {
+
+            val clipboard = getSystemService(
+                CLIPBOARD_SERVICE
+            ) as ClipboardManager
+
+            clipboard.setPrimaryClip(
+                ClipData.newPlainText(label, text)
+            )
+
+            statusView?.text = "লেখা Copy হয়েছে"
+
+        } catch (_: Exception) {
+
+            statusView?.text = "Copy করা যায়নি"
+        }
     }
 
     // =====================================
@@ -222,15 +348,11 @@ class FloatingTranslatorService : Service() {
     private fun refreshSpeechHistory() {
 
         val historyView = speechHistoryView ?: return
-
         val entries = loadSpeechHistory()
 
         historyView.text = if (entries.isEmpty()) {
-
             "এখনো কোনো কথা শনাক্ত হয়নি।"
-
         } else {
-
             entries.joinToString(
                 "\n\n────────────────\n\n"
             )
@@ -239,8 +361,6 @@ class FloatingTranslatorService : Service() {
         historyScrollView?.post {
             historyScrollView?.fullScroll(View.FOCUS_DOWN)
         }
-
-        lastHistoryEntry = entries.lastOrNull() ?: ""
     }
 
     // =====================================
@@ -257,7 +377,6 @@ class FloatingTranslatorService : Service() {
 
             val entries = loadSpeechHistory()
 
-            // পরপর একই ফলাফল এলে আবার যোগ করবে না
             if (entries.lastOrNull() == cleanMessage) {
                 return@post
             }
@@ -266,9 +385,6 @@ class FloatingTranslatorService : Service() {
                 .takeLast(MAX_HISTORY_ENTRIES)
 
             saveSpeechHistory(updatedEntries)
-
-            lastHistoryEntry = cleanMessage
-
             refreshSpeechHistory()
         }
     }
@@ -283,16 +399,34 @@ class FloatingTranslatorService : Service() {
 
         minimized = true
 
+        val preferences = getSharedPreferences(
+            PREFS_NAME,
+            MODE_PRIVATE
+        )
+
+        currentOpacity = preferences.getInt(
+            PREF_OPACITY,
+            100
+        ).coerceIn(30, 100)
+
+        displayMode = preferences.getInt(
+            PREF_DISPLAY_MODE,
+            1
+        ).coerceIn(0, 1)
+
+        speechRawMessage = ""
+
         val screenHeight =
             resources.displayMetrics.heightPixels
 
-        expandedHeight = (screenHeight * 0.48).toInt()
+        expandedHeight = (screenHeight * 0.70).toInt()
         minimizedHeight = dp(58)
 
         rootView = ScrollView(this).apply {
             setBackgroundColor(Color.TRANSPARENT)
             isFillViewport = true
             isVerticalScrollBarEnabled = true
+            alpha = currentOpacity / 100f
         }
 
         val mainLayout = LinearLayout(this).apply {
@@ -323,7 +457,6 @@ class FloatingTranslatorService : Service() {
             textSize = 14f
             setTextColor(Color.WHITE)
             typeface = Typeface.DEFAULT_BOLD
-
             gravity = Gravity.CENTER_VERTICAL
 
             layoutParams = LinearLayout.LayoutParams(
@@ -341,7 +474,6 @@ class FloatingTranslatorService : Service() {
 
                     dragX = event.rawX.toInt() - params.x
                     dragY = event.rawY.toInt() - params.y
-
                     true
                 }
 
@@ -460,11 +592,6 @@ class FloatingTranslatorService : Service() {
 
         languageSpinner.adapter = adapter
 
-        val preferences = getSharedPreferences(
-            PREFS_NAME,
-            MODE_PRIVATE
-        )
-
         val savedLanguage = preferences.getString(
             PREF_LANGUAGE,
             "bn-BD"
@@ -526,8 +653,171 @@ class FloatingTranslatorService : Service() {
         )
 
         // =====================================
+        // DISPLAY MODE SETTINGS
+        // =====================================
+
+        val displayLabel = TextView(this).apply {
+
+            text = "Display Mode"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+
+            setPadding(dp(4), dp(14), dp(4), dp(6))
+        }
+
+        contentLayout?.addView(displayLabel)
+
+        val displayOptions = arrayOf(
+            "শুধু বাংলা",
+            "Original + বাংলা"
+        )
+
+        val displaySpinner = Spinner(this)
+
+        val displayAdapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            displayOptions
+        )
+
+        displayAdapter.setDropDownViewResource(
+            android.R.layout.simple_spinner_dropdown_item
+        )
+
+        displaySpinner.adapter = displayAdapter
+        displaySpinner.setSelection(displayMode)
+
+        displaySpinner.onItemSelectedListener =
+            object : AdapterView.OnItemSelectedListener {
+
+                override fun onItemSelected(
+                    parent: AdapterView<*>?,
+                    view: View?,
+                    position: Int,
+                    id: Long
+                ) {
+
+                    displayMode = position.coerceIn(0, 1)
+
+                    preferences.edit()
+                        .putInt(PREF_DISPLAY_MODE, displayMode)
+                        .apply()
+
+                    updateSpeechDisplay()
+
+                    statusView?.text = if (displayMode == 0) {
+                        "শুধু বাংলা দেখানো হচ্ছে"
+                    } else {
+                        "Original + বাংলা দেখানো হচ্ছে"
+                    }
+                }
+
+                override fun onNothingSelected(
+                    parent: AdapterView<*>?
+                ) {
+                }
+            }
+
+        contentLayout?.addView(
+            displaySpinner,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+
+        // =====================================
+        // OPACITY SETTINGS
+        // =====================================
+
+        val opacityHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(14), dp(4), dp(2))
+        }
+
+        val opacityLabel = TextView(this).apply {
+            text = "Popup Opacity"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                dp(32),
+                1f
+            )
+        }
+
+        val opacityValue = TextView(this).apply {
+            text = "$currentOpacity%"
+            textSize = 14f
+            setTextColor(Color.rgb(100, 220, 150))
+            typeface = Typeface.DEFAULT_BOLD
+        }
+
+        opacityHeader.addView(opacityLabel)
+        opacityHeader.addView(opacityValue)
+
+        contentLayout?.addView(opacityHeader)
+
+        val opacitySeekBar = SeekBar(this).apply {
+
+            max = 70
+            progress = currentOpacity - 30
+
+            setOnSeekBarChangeListener(
+                object : SeekBar.OnSeekBarChangeListener {
+
+                    override fun onProgressChanged(
+                        seekBar: SeekBar?,
+                        progress: Int,
+                        fromUser: Boolean
+                    ) {
+
+                        currentOpacity = progress + 30
+
+                        opacityValue.text = "$currentOpacity%"
+
+                        rootView.alpha = currentOpacity / 100f
+
+                        if (fromUser) {
+                            preferences.edit()
+                                .putInt(PREF_OPACITY, currentOpacity)
+                                .apply()
+                        }
+                    }
+
+                    override fun onStartTrackingTouch(
+                        seekBar: SeekBar?
+                    ) {
+                    }
+
+                    override fun onStopTrackingTouch(
+                        seekBar: SeekBar?
+                    ) {
+                        statusView?.text = "Popup opacity saved"
+                    }
+                }
+            )
+        }
+
+        contentLayout?.addView(
+            opacitySeekBar,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(42)
+            )
+        )
+
+        // =====================================
         // CURRENT SPEECH
         // =====================================
+
+        val speechHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(14), dp(4), dp(6))
+        }
 
         val speechLabel = TextView(this).apply {
 
@@ -535,10 +825,29 @@ class FloatingTranslatorService : Service() {
             textSize = 14f
             setTextColor(Color.WHITE)
 
-            setPadding(dp(4), dp(14), dp(4), dp(6))
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                dp(40),
+                1f
+            )
         }
 
-        contentLayout?.addView(speechLabel)
+        val copySpeechButton = makeButton("Copy")
+
+        copySpeechButton.setOnClickListener {
+            val textToCopy = if (displayMode == 0) {
+                extractBanglaText(speechRawMessage)
+            } else {
+                speechRawMessage
+            }
+
+            copyText(textToCopy, "Live Speech")
+        }
+
+        speechHeader.addView(speechLabel)
+        speechHeader.addView(copySpeechButton)
+
+        contentLayout?.addView(speechHeader)
 
         speechView = TextView(this).apply {
 
@@ -614,7 +923,6 @@ class FloatingTranslatorService : Service() {
             )
         )
 
-        // আগের সংরক্ষিত History দেখাবে
         refreshSpeechHistory()
 
         // =====================================
@@ -662,6 +970,39 @@ class FloatingTranslatorService : Service() {
         // ENGLISH TRANSLATION
         // =====================================
 
+        val englishHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(8), 0, dp(4))
+        }
+
+        val englishLabel = TextView(this).apply {
+
+            text = "English Translation"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                dp(38),
+                1f
+            )
+        }
+
+        val copyEnglishButton = makeButton("Copy")
+
+        copyEnglishButton.setOnClickListener {
+            copyText(
+                englishResultView?.text?.toString().orEmpty(),
+                "English Translation"
+            )
+        }
+
+        englishHeader.addView(englishLabel)
+        englishHeader.addView(copyEnglishButton)
+
+        contentLayout?.addView(englishHeader)
+
         englishResultView = TextView(this).apply {
 
             text = "English translation will appear here"
@@ -681,9 +1022,7 @@ class FloatingTranslatorService : Service() {
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = dp(8)
-            }
+            )
         )
 
         setupAutomaticTranslation()
