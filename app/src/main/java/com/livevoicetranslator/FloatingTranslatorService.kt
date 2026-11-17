@@ -47,6 +47,14 @@ class FloatingTranslatorService : Service() {
         const val EXTRA_MESSAGE = "message"
         const val EXTRA_STATUS = "status"
 
+        private const val ACTION_AUDIO_MONITOR =
+            "com.livevoicetranslator.AUDIO_MONITOR"
+
+        private const val EXTRA_AUDIO_STATE = "audio_state"
+        private const val EXTRA_AUDIO_RMS = "audio_rms"
+        private const val EXTRA_AUDIO_VOICE = "audio_voice"
+        private const val EXTRA_AUDIO_SENT = "audio_sent"
+
         private const val PREFS_NAME = "LiveVoiceSettings"
         private const val PREF_LANGUAGE = "speech_language"
         private const val PREF_OPACITY = "popup_opacity"
@@ -82,6 +90,11 @@ class FloatingTranslatorService : Service() {
 
     private var conversationLayout: LinearLayout? = null
     private var conversationScroll: ScrollView? = null
+
+    private var audioStateView: TextView? = null
+    private var audioRmsView: TextView? = null
+    private var audioVoiceView: TextView? = null
+    private var audioSentView: TextView? = null
 
     private var speechRawMessage = ""
     private var currentOpacity = 100
@@ -136,6 +149,37 @@ class FloatingTranslatorService : Service() {
                 }
             }
 
+            ACTION_AUDIO_MONITOR -> {
+
+                if (popupVisible) {
+
+                    val state = intent.getStringExtra(
+                        EXTRA_AUDIO_STATE
+                    ) ?: "UNKNOWN"
+
+                    val rms = intent.getIntExtra(
+                        EXTRA_AUDIO_RMS,
+                        0
+                    )
+
+                    val voice = intent.getBooleanExtra(
+                        EXTRA_AUDIO_VOICE,
+                        false
+                    )
+
+                    val sent = intent.getStringExtra(
+                        EXTRA_AUDIO_SENT
+                    ) ?: "Waiting"
+
+                    updateAudioMonitor(
+                        state,
+                        rms,
+                        voice,
+                        sent
+                    )
+                }
+            }
+
             ACTION_HIDE -> hidePopup()
         }
 
@@ -175,6 +219,112 @@ class FloatingTranslatorService : Service() {
                 dp(8)
             )
         }
+    }
+
+    // =====================================
+    // AUDIO MONITOR
+    // =====================================
+
+    private fun updateAudioMonitor(
+        state: String,
+        rms: Int,
+        voice: Boolean,
+        sent: String
+    ) {
+
+        mainHandler.post {
+
+            audioStateView?.text = "Audio: $state"
+
+            audioRmsView?.text = "RMS Level: $rms"
+
+            audioVoiceView?.text = if (voice) {
+                "Voice Detection: YES"
+            } else {
+                "Voice Detection: NO"
+            }
+
+            audioVoiceView?.setTextColor(
+                if (voice) {
+                    Color.rgb(100, 230, 160)
+                } else {
+                    Color.LTGRAY
+                }
+            )
+
+            audioSentView?.text = "Worker: $sent"
+
+            audioStateView?.setTextColor(
+                when (state) {
+                    "ACTIVE" -> Color.rgb(100, 230, 160)
+                    "STOPPED" -> Color.LTGRAY
+                    else -> Color.rgb(255, 190, 100)
+                }
+            )
+        }
+    }
+
+    private fun createAudioMonitor(): LinearLayout {
+
+        val panel = LinearLayout(this).apply {
+
+            orientation = LinearLayout.VERTICAL
+
+            setPadding(
+                dp(11),
+                dp(9),
+                dp(11),
+                dp(9)
+            )
+
+            background = roundedBackground(
+                Color.rgb(36, 48, 64),
+                dp(11)
+            )
+        }
+
+        val heading = TextView(this).apply {
+            text = "AUDIO MONITOR"
+            textSize = 13f
+            setTextColor(Color.rgb(125, 190, 255))
+            typeface = Typeface.DEFAULT_BOLD
+        }
+
+        audioStateView = TextView(this).apply {
+            text = "Audio: Waiting"
+            textSize = 13f
+            setTextColor(Color.LTGRAY)
+            setPadding(0, dp(7), 0, dp(3))
+        }
+
+        audioRmsView = TextView(this).apply {
+            text = "RMS Level: 0"
+            textSize = 13f
+            setTextColor(Color.WHITE)
+            setPadding(0, dp(3), 0, dp(3))
+        }
+
+        audioVoiceView = TextView(this).apply {
+            text = "Voice Detection: NO"
+            textSize = 13f
+            setTextColor(Color.LTGRAY)
+            setPadding(0, dp(3), 0, dp(3))
+        }
+
+        audioSentView = TextView(this).apply {
+            text = "Worker: Waiting"
+            textSize = 12f
+            setTextColor(Color.rgb(255, 210, 130))
+            setPadding(0, dp(3), 0, 0)
+        }
+
+        panel.addView(heading)
+        panel.addView(audioStateView)
+        panel.addView(audioRmsView)
+        panel.addView(audioVoiceView)
+        panel.addView(audioSentView)
+
+        return panel
     }
 
     // =====================================
@@ -226,7 +376,6 @@ class FloatingTranslatorService : Service() {
             }
         }
 
-        // Label না থাকলে ভাষা দেখে fallback
         val hasBangla = Regex("[\\u0980-\\u09FF]")
             .containsMatchIn(message)
 
@@ -248,10 +397,8 @@ class FloatingTranslatorService : Service() {
         layout.removeAllViews()
 
         val history = loadSpeechHistory()
-
         val items = history.toMutableList()
 
-        // Live preview final history-তে থাকলে আবার দেখাবে না
         if (
             speechRawMessage.isNotBlank() &&
             history.lastOrNull() != speechRawMessage.trim()
@@ -308,12 +455,7 @@ class FloatingTranslatorService : Service() {
 
             orientation = LinearLayout.VERTICAL
 
-            setPadding(
-                dp(11),
-                dp(10),
-                dp(11),
-                dp(10)
-            )
+            setPadding(dp(11), dp(10), dp(11), dp(10))
 
             background = roundedBackground(
                 if (isPreview) {
@@ -326,20 +468,15 @@ class FloatingTranslatorService : Service() {
         }
 
         val cardHeader = LinearLayout(this).apply {
-
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
 
         val cardTitle = TextView(this).apply {
 
-            text = if (isPreview) {
-                "LIVE PREVIEW"
-            } else {
-                "CONVERSATION"
-            }
-
+            text = if (isPreview) "LIVE PREVIEW" else "CONVERSATION"
             textSize = 11f
+
             setTextColor(
                 if (isPreview) {
                     Color.rgb(100, 220, 170)
@@ -380,37 +517,24 @@ class FloatingTranslatorService : Service() {
 
         cardHeader.addView(cardTitle)
         cardHeader.addView(copyAllButton)
-
         card.addView(cardHeader)
 
-        // Original Speech
         if (displayMode == 1 && pair.original.isNotBlank()) {
 
             val originalHeader = TextView(this).apply {
-
                 text = "ORIGINAL SPEECH"
                 textSize = 12f
                 setTextColor(Color.rgb(125, 190, 255))
                 typeface = Typeface.DEFAULT_BOLD
-
                 setPadding(0, dp(9), 0, dp(4))
             }
 
             val originalText = TextView(this).apply {
-
                 text = pair.original
                 textSize = 16f
                 setTextColor(Color.WHITE)
-
-                setPadding(
-                    dp(10),
-                    dp(10),
-                    dp(10),
-                    dp(10)
-                )
-
+                setPadding(dp(10), dp(10), dp(10), dp(10))
                 setLineSpacing(dp(3).toFloat(), 1f)
-
                 background = roundedBackground(
                     Color.rgb(51, 68, 91),
                     dp(9)
@@ -423,46 +547,34 @@ class FloatingTranslatorService : Service() {
                 copyText(pair.original, "Original Speech")
             }
 
-            card.addView(originalHeader)
-            card.addView(originalText)
-
             val originalCopyRow = LinearLayout(this).apply {
                 gravity = Gravity.END
                 setPadding(0, dp(4), 0, dp(5))
             }
 
             originalCopyRow.addView(originalCopy)
+
+            card.addView(originalHeader)
+            card.addView(originalText)
             card.addView(originalCopyRow)
         }
 
-        // Bengali Translation
         if (pair.bengali.isNotBlank()) {
 
             val bengaliHeader = TextView(this).apply {
-
                 text = "বাংলা অনুবাদ"
                 textSize = 13f
                 setTextColor(Color.rgb(100, 230, 160))
                 typeface = Typeface.DEFAULT_BOLD
-
                 setPadding(0, dp(8), 0, dp(5))
             }
 
             val bengaliText = TextView(this).apply {
-
                 text = pair.bengali
                 textSize = 17f
                 setTextColor(Color.WHITE)
-
-                setPadding(
-                    dp(11),
-                    dp(11),
-                    dp(11),
-                    dp(11)
-                )
-
+                setPadding(dp(11), dp(11), dp(11), dp(11))
                 setLineSpacing(dp(4).toFloat(), 1f)
-
                 background = roundedBackground(
                     Color.rgb(39, 79, 67),
                     dp(9)
@@ -475,15 +587,15 @@ class FloatingTranslatorService : Service() {
                 copyText(pair.bengali, "বাংলা অনুবাদ")
             }
 
-            card.addView(bengaliHeader)
-            card.addView(bengaliText)
-
             val bengaliCopyRow = LinearLayout(this).apply {
                 gravity = Gravity.END
                 setPadding(0, dp(4), 0, dp(5))
             }
 
             bengaliCopyRow.addView(bengaliCopy)
+
+            card.addView(bengaliHeader)
+            card.addView(bengaliText)
             card.addView(bengaliCopyRow)
         }
 
@@ -536,7 +648,6 @@ class FloatingTranslatorService : Service() {
             statusView?.text = "লেখা Copy হয়েছে"
 
         } catch (_: Exception) {
-
             statusView?.text = "Copy করা যায়নি"
         }
     }
@@ -615,9 +726,7 @@ class FloatingTranslatorService : Service() {
         historyView.text = if (entries.isEmpty()) {
             "এখনো কোনো কথা শনাক্ত হয়নি।"
         } else {
-            entries.joinToString(
-                "\n\n────────────────\n\n"
-            )
+            entries.joinToString("\n\n────────────────\n\n")
         }
 
         historyScrollView?.post {
@@ -696,7 +805,6 @@ class FloatingTranslatorService : Service() {
         val mainLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(5), dp(12), dp(8))
-
             background = roundedBackground(
                 Color.rgb(25, 30, 42),
                 dp(14)
@@ -713,7 +821,6 @@ class FloatingTranslatorService : Service() {
         }
 
         val title = TextView(this).apply {
-
             text = "LIVE VOICE TRANSLATOR"
             textSize = 14f
             setTextColor(Color.WHITE)
@@ -732,14 +839,12 @@ class FloatingTranslatorService : Service() {
             when (event.action) {
 
                 MotionEvent.ACTION_DOWN -> {
-
                     dragX = event.rawX.toInt() - params.x
                     dragY = event.rawY.toInt() - params.y
                     true
                 }
 
                 MotionEvent.ACTION_MOVE -> {
-
                     params.x = event.rawX.toInt() - dragX
                     params.y = event.rawY.toInt() - dragY
 
@@ -757,15 +862,12 @@ class FloatingTranslatorService : Service() {
         }
 
         minimizeButton = Button(this).apply {
-
             text = "+"
             textSize = 19f
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.TRANSPARENT)
-
             minWidth = dp(40)
             minHeight = dp(40)
-
             setPadding(dp(4), 0, dp(4), 0)
 
             setOnClickListener {
@@ -774,15 +876,12 @@ class FloatingTranslatorService : Service() {
         }
 
         val closeButton = Button(this).apply {
-
             text = "✕"
             textSize = 17f
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.TRANSPARENT)
-
             minWidth = dp(40)
             minHeight = dp(40)
-
             setPadding(dp(4), 0, dp(4), 0)
 
             setOnClickListener {
@@ -793,7 +892,6 @@ class FloatingTranslatorService : Service() {
         header.addView(title)
         header.addView(minimizeButton)
         header.addView(closeButton)
-
         mainLayout.addView(header)
 
         contentLayout = LinearLayout(this).apply {
@@ -804,23 +902,30 @@ class FloatingTranslatorService : Service() {
 
         // STATUS
         statusView = TextView(this).apply {
-
             text = "অনুবাদ প্রস্তুত"
             textSize = 13f
             setTextColor(Color.rgb(100, 220, 150))
-
-            setPadding(dp(4), dp(5), dp(4), dp(12))
+            setPadding(dp(4), dp(5), dp(4), dp(10))
         }
 
         contentLayout?.addView(statusView)
 
+        // AUDIO MONITOR
+        contentLayout?.addView(
+            createAudioMonitor(),
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(8)
+            }
+        )
+
         // LANGUAGE SELECTOR
         val languageLabel = TextView(this).apply {
-
             text = "Speech Language"
             textSize = 14f
             setTextColor(Color.WHITE)
-
             setPadding(dp(4), dp(8), dp(4), dp(6))
         }
 
@@ -909,11 +1014,9 @@ class FloatingTranslatorService : Service() {
 
         // DISPLAY MODE
         val displayLabel = TextView(this).apply {
-
             text = "Display Mode"
             textSize = 14f
             setTextColor(Color.WHITE)
-
             setPadding(dp(4), dp(14), dp(4), dp(6))
         }
 
@@ -1006,11 +1109,9 @@ class FloatingTranslatorService : Service() {
 
         opacityHeader.addView(opacityLabel)
         opacityHeader.addView(opacityValue)
-
         contentLayout?.addView(opacityHeader)
 
         val opacitySeekBar = SeekBar(this).apply {
-
             max = 70
             progress = currentOpacity - 30
 
@@ -1024,9 +1125,7 @@ class FloatingTranslatorService : Service() {
                     ) {
 
                         currentOpacity = progress + 30
-
                         opacityValue.text = "$currentOpacity%"
-
                         rootView.alpha = currentOpacity / 100f
 
                         if (fromUser) {
@@ -1036,14 +1135,10 @@ class FloatingTranslatorService : Service() {
                         }
                     }
 
-                    override fun onStartTrackingTouch(
-                        seekBar: SeekBar?
-                    ) {
+                    override fun onStartTrackingTouch(seekBar: SeekBar?) {
                     }
 
-                    override fun onStopTrackingTouch(
-                        seekBar: SeekBar?
-                    ) {
+                    override fun onStopTrackingTouch(seekBar: SeekBar?) {
                         statusView?.text = "Popup opacity saved"
                     }
                 }
@@ -1066,7 +1161,6 @@ class FloatingTranslatorService : Service() {
         }
 
         val speechLabel = TextView(this).apply {
-
             text = "Smart Conversation"
             textSize = 14f
             setTextColor(Color.WHITE)
@@ -1105,19 +1199,15 @@ class FloatingTranslatorService : Service() {
 
         speechHeader.addView(speechLabel)
         speechHeader.addView(copySpeechButton)
-
         contentLayout?.addView(speechHeader)
 
         conversationScroll = ScrollView(this).apply {
-
             isFillViewport = false
             isVerticalScrollBarEnabled = true
-
             background = roundedBackground(
                 Color.rgb(31, 38, 52),
                 dp(12)
             )
-
             setPadding(dp(7), dp(7), dp(7), dp(7))
         }
 
@@ -1139,37 +1229,29 @@ class FloatingTranslatorService : Service() {
 
         // HISTORY
         val historyLabel = TextView(this).apply {
-
             text = "কথোপকথন / TRANSLATION HISTORY"
             textSize = 14f
             setTextColor(Color.rgb(120, 220, 170))
-
             setPadding(dp(4), dp(16), dp(4), dp(6))
         }
 
         contentLayout?.addView(historyLabel)
 
         historyScrollView = ScrollView(this).apply {
-
             isFillViewport = false
             isVerticalScrollBarEnabled = true
-
             background = roundedBackground(
                 Color.rgb(38, 45, 60),
                 dp(12)
             )
-
             setPadding(dp(4), dp(4), dp(4), dp(4))
         }
 
         speechHistoryView = TextView(this).apply {
-
             text = "এখনো কোনো কথা শনাক্ত হয়নি।"
             textSize = 16f
             setTextColor(Color.WHITE)
-
             setPadding(dp(12), dp(12), dp(12), dp(12))
-
             setLineSpacing(dp(3).toFloat(), 1f)
             gravity = Gravity.TOP
         }
@@ -1188,31 +1270,24 @@ class FloatingTranslatorService : Service() {
 
         // BANGLA INPUT
         val inputLabel = TextView(this).apply {
-
             text = "বাংলায় লিখুন → English Translation"
             textSize = 14f
             setTextColor(Color.WHITE)
-
             setPadding(dp(4), dp(18), dp(4), dp(6))
         }
 
         contentLayout?.addView(inputLabel)
 
         banglaInput = EditText(this).apply {
-
             hint = "এখানে বাংলায় লিখুন"
             textSize = 16f
-
             setTextColor(Color.BLACK)
             setHintTextColor(Color.GRAY)
-
             setPadding(dp(12), dp(10), dp(12), dp(10))
             setBackgroundColor(Color.WHITE)
-
             minLines = 2
             maxLines = 4
             gravity = Gravity.TOP
-
             imeOptions = EditorInfo.IME_ACTION_DONE
         }
 
@@ -1232,7 +1307,6 @@ class FloatingTranslatorService : Service() {
         }
 
         val englishLabel = TextView(this).apply {
-
             text = "English Translation"
             textSize = 14f
             setTextColor(Color.WHITE)
@@ -1255,17 +1329,13 @@ class FloatingTranslatorService : Service() {
 
         englishHeader.addView(englishLabel)
         englishHeader.addView(copyEnglishButton)
-
         contentLayout?.addView(englishHeader)
 
         englishResultView = TextView(this).apply {
-
             text = "English translation will appear here"
             textSize = 17f
             setTextColor(Color.WHITE)
-
             setPadding(dp(12), dp(12), dp(12), dp(12))
-
             background = roundedBackground(
                 Color.rgb(45, 52, 68),
                 dp(12)
@@ -1286,24 +1356,18 @@ class FloatingTranslatorService : Service() {
         params = LayoutParams(
             (resources.displayMetrics.widthPixels * 0.94).toInt(),
             minimizedHeight,
-
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 LayoutParams.TYPE_APPLICATION_OVERLAY
             } else {
                 LayoutParams.TYPE_PHONE
             },
-
             LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 LayoutParams.FLAG_NOT_FOCUSABLE or
                 LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-
             PixelFormat.TRANSLUCENT
-
         ).apply {
-
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             y = dp(12)
-
             softInputMode =
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
@@ -1311,12 +1375,9 @@ class FloatingTranslatorService : Service() {
         contentLayout?.visibility = View.GONE
 
         try {
-
             windowManager.addView(rootView, params)
             popupVisible = true
-
         } catch (_: Exception) {
-
             popupVisible = false
             stopSelf()
         }
@@ -1357,10 +1418,8 @@ class FloatingTranslatorService : Service() {
                     }
 
                     if (input.isBlank()) {
-
                         englishResultView?.text =
                             "English translation will appear here"
-
                         statusView?.text = "বাংলা লিখুন"
                         return
                     }
@@ -1373,7 +1432,6 @@ class FloatingTranslatorService : Service() {
                     }
 
                     translationRunnable = runnable
-
                     mainHandler.postDelayed(runnable, 700)
                 }
 
@@ -1402,7 +1460,6 @@ class FloatingTranslatorService : Service() {
                 )
 
                 connection = url.openConnection() as HttpURLConnection
-
                 connection.requestMethod = "GET"
                 connection.connectTimeout = 10000
                 connection.readTimeout = 10000
@@ -1429,12 +1486,9 @@ class FloatingTranslatorService : Service() {
                     }
 
                     if (translated.isNotBlank()) {
-
                         englishResultView?.text = translated
                         statusView?.text = "English translation complete"
-
                     } else {
-
                         englishResultView?.text = "অনুবাদ পাওয়া যায়নি।"
                         statusView?.text = "Translation unavailable"
                     }
@@ -1473,7 +1527,6 @@ class FloatingTranslatorService : Service() {
         if (minimized) {
 
             contentLayout?.visibility = View.GONE
-
             params.height = minimizedHeight
 
             params.flags =
@@ -1484,7 +1537,6 @@ class FloatingTranslatorService : Service() {
         } else {
 
             contentLayout?.visibility = View.VISIBLE
-
             params.height = expandedHeight
 
             params.flags =
